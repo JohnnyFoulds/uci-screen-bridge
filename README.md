@@ -61,16 +61,6 @@ You need to click the "Diagnostic" button to run the diagnostic process. It will
 
 In this section you can find video content related to the software.
 
-[Game against Stockfish 5 2000 ELO](https://youtu.be/6KV4kHBKh3w)
-
-[Test game on chess.com](https://youtu.be/Z3-hE0JbJf0)
-
-[Test game on Lichess against Alper Karayaman](https://youtu.be/rz-2QRwYVNY)
-
-[Game against Lionel45 on lichess org](https://youtu.be/YC5-6DXq_CI)
-
-[Game against erpalazzi on Lichess](https://youtu.be/XXKsIOWz9QQ)
-
 [Play online chess with real chess board and web camera | NO DGT BOARD!](https://www.youtube.com/watch?v=LX-4czb3xi0&lc=Ugxo6cXY0cR2TArDpuZ4AaABAg)
 
 ## Frequently Asked Questions
