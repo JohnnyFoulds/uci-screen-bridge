@@ -1,6 +1,7 @@
 import sys
 
 from skimage.metrics import structural_similarity
+from uci_screen_bridge.utils.paths import data_path
 import chess
 import pickle
 import os
@@ -17,7 +18,7 @@ class Board_basics:
         self.SSIM_THRESHOLD_DARK_BLACK = 1.0
         self.ssim_table = [[self.SSIM_THRESHOLD_DARK_BLACK, self.SSIM_THRESHOLD_DARK_WHITE],
                            [self.SSIM_THRESHOLD_LIGHT_BLACK, self.SSIM_THRESHOLD_LIGHT_WHITE]]
-        self.save_file = "ssim.bin"
+        self.save_file = data_path("ssim.bin")
 
     def initialize_ssim(self, frame):
         light_white = []

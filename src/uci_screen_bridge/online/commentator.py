@@ -4,7 +4,7 @@ import mss
 import numpy as np
 import cv2
 import time
-from classifier import Classifier
+from uci_screen_bridge.detection.classifier import Classifier
 
 
 class Commentator_thread(Thread):

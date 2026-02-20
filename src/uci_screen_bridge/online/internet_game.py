@@ -1,4 +1,4 @@
-import chessboard_detection
+from uci_screen_bridge.calibration import chessboard_detection
 import pyautogui
 import time
 

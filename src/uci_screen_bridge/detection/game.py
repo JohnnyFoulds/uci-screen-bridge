@@ -6,11 +6,12 @@ import numpy as np
 import pickle
 import os
 import sys
-from helper import detect_state, get_square_image, predict
-from internet_game import Internet_game
-from lichess_game import Lichess_game
-from commentator import Commentator_thread
-from lichess_commentator import Lichess_commentator
+from uci_screen_bridge.utils.helper import detect_state, get_square_image, predict
+from uci_screen_bridge.utils.paths import model_path, data_path
+from uci_screen_bridge.online.internet_game import Internet_game
+from uci_screen_bridge.online.lichess_game import Lichess_game
+from uci_screen_bridge.online.commentator import Commentator_thread
+from uci_screen_bridge.online.lichess_commentator import Lichess_commentator
 
 
 class Game:
@@ -34,9 +35,9 @@ class Game:
         self.knn = cv2.ml.KNearest_create()
         self.features = None
         self.labels = None
-        self.save_file = 'hog.bin'
-        self.piece_model = cv2.dnn.readNetFromONNX("cnn_piece.onnx")
-        self.color_model = cv2.dnn.readNetFromONNX("cnn_color.onnx")
+        self.save_file = data_path("hog.bin")
+        self.piece_model = cv2.dnn.readNetFromONNX(model_path("cnn_piece.onnx"))
+        self.color_model = cv2.dnn.readNetFromONNX(model_path("cnn_color.onnx"))
 
         if token:
             commentator_thread = Lichess_commentator()

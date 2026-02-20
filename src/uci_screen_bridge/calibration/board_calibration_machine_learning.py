@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 
-from helper import euclidean_distance, perspective_transform, predict
+from uci_screen_bridge.utils.helper import euclidean_distance, perspective_transform, predict
 
 
 def detect_board(original_image, corner_model, piece_model, color_model):

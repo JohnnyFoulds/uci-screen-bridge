@@ -1,6 +1,7 @@
 import sys
 
 import numpy as np
+from uci_screen_bridge.utils.paths import model_path
 import cv2
 import pyautogui
 import mss
@@ -22,8 +23,8 @@ def find_chessboard():
     large_image = np.array(np.array(sct.grab(monitor)))
     large_image = cv2.cvtColor(large_image, cv2.COLOR_BGR2RGB)
     method = cv2.TM_SQDIFF_NORMED
-    white_image = cv2.imread("white.JPG")
-    black_image = cv2.imread("black.JPG")
+    white_image = cv2.imread(model_path("white.JPG"))
+    black_image = cv2.imread(model_path("black.JPG"))
     result_white = cv2.matchTemplate(white_image, large_image, method)
     result_black = cv2.matchTemplate(black_image, large_image, method)
     we_are_white = True

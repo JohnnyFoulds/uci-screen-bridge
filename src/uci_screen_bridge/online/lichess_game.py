@@ -3,6 +3,7 @@ import sys
 import os
 import chess
 import pickle
+from uci_screen_bridge.utils.paths import data_path
 
 
 class Lichess_game:
@@ -22,7 +23,7 @@ class Lichess_game:
         self.client = client
         self.game_id = game['gameId']
         self.token = token
-        self.save_file = "promotion.bin"
+        self.save_file = data_path("promotion.bin")
         self.promotion_pieces = {
             "Queen": chess.QUEEN,
             "Knight": chess.KNIGHT,
