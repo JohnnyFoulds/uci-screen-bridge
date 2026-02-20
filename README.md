@@ -1,10 +1,36 @@
 # Play online chess with a real chess board
 Program that enables you to play online chess using real chess boards.  Using computer vision it will detect the moves you make on a chess board. After that, if it's your turn to move in the online game, it will make the necessary clicks to make the move.
 
+## Installation
+
+```bash
+# Create the conda environment (Python 3.12, named "uci-screen-bridge")
+make venv
+conda activate uci-screen-bridge
+
+# Install the package in editable mode (required before running)
+make install
+```
+
+Alternatively, install dependencies directly:
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+## Launching the GUI
+
+```bash
+uci-screen-bridge
+# or
+python -m uci_screen_bridge.gui
+```
+
 ## Setup
 
 1. Turn off all the animations and extra features to keep chess board of online game as simple as possible. You can skip this step if you enter your Lichess API Access Token. 
-2. Take screenshots of the chess board of an online game at starting position, one for when you play white and one for when you play black and save them as "white.JPG" and "black.JPG" similar to the images included in the source code. You can skip this step if you enable "Find chess board of online game without template images." option or enter your Lichess API Access Token.
+2. Take screenshots of the chess board of an online game at starting position, one for when you play white and one for when you play black. Replace the bundled template images at `src/uci_screen_bridge/models/white.JPG` and `src/uci_screen_bridge/models/black.JPG` with your screenshots. You can skip this step if you enable "Find chess board of online game without template images." option or enter your Lichess API Access Token.
 3. Enable auto-promotion to queen from settings of online game. You can skip this step if you enter your Lichess API Access Token.
 4. Place your webcam near to your chessboard so that all of the squares and pieces can be clearly seen by it.
 5. Select a board calibration mode and follow its instructions.
@@ -17,7 +43,7 @@ Program that enables you to play online chess using real chess boards.  Using co
 
 3. Check that corners of your chess board are correctly detected by "board_calibration.py" and press key "q" to save detected chess board corners. You don't need to manually select chess board corners; it should be automatically detected by the program. The square covered by points (0,0), (0,1),(1,0) and (1,1) should be a8. You can rotate the image by pressing the key "r" to adjust that. Example chess board detection result:
 
-   ![](https://github.com/karayaman/Play-online-chess-with-real-chess-board/blob/main/chessboard_detection_result.jpg?raw=true)
+   ![Chessboard detection result](chessboard_detection_result.jpg)
 
 ## Board Calibration(Pieces are in their starting positions.)
 
@@ -28,7 +54,7 @@ Program that enables you to play online chess using real chess boards.  Using co
    - The line near the black pieces will be green.
    - Press any key to exit once you've confirmed the board setup.
 
-<img src="https://github.com/karayaman/Play-online-chess-with-real-chess-board/raw/main/board_detection_result.jpg" style="zoom:67%;" />
+<img src="board_detection_result.jpg" style="zoom:67%;" alt="Board detection result" />
 
 ## Board Calibration(Just before the game starts.)
 
@@ -49,13 +75,13 @@ Program that enables you to play online chess using real chess boards.  Using co
 
 You need to run the GUI to do the steps in Setup, Usage and Diagnostic sections. Also, you can enter your Lichess API Access Token via Connection&#8594;Lichess (You need to enable "Play games with the board API" while generating the token).
 
-![](https://github.com/karayaman/Play-online-chess-with-real-chess-board/blob/main/gui.jpg?raw=true)
+![GUI screenshot](gui.jpg)
 
 ## Diagnostic
 
 You need to click the "Diagnostic" button to run the diagnostic process. It will show your chessboard in a perspective-transformed form, exactly as the software sees it. Additionally, it will mark white pieces with a blue circle and black pieces with a green circle, allowing you to verify if the software can detect the pieces on the chess board.
 
-![](https://github.com/karayaman/Play-online-chess-with-real-chess-board/blob/main/diagnostic.jpg?raw=true)
+![Diagnostic overlay](diagnostic.jpg)
 
 ## Video
 
@@ -86,6 +112,8 @@ The program asked you to redo your move because it understood that you had made 
 It should detect corners of the chess board almost immediately. Please do not spend any time waiting for it to detect corners of the chess board. If it can't detect corners of the chess board almost immediately, this means that it can't see your chess board well from that position/angle. Placing your webcam somewhere a bit higher or lower might solve the issue.
 
 ## Required libraries
+
+Dependencies are listed in `requirements.txt` and installed automatically via `make install` or `pip install -r requirements.txt`:
 
 - opencv-python
 - python-chess
