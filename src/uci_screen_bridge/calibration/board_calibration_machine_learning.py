@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 
-from helper import euclidean_distance, perspective_transform, predict
+from uci_screen_bridge.utils.helper import euclidean_distance, perspective_transform, predict
 
 
 def detect_board(original_image, corner_model, piece_model, color_model):
@@ -27,9 +27,10 @@ def detect_board(original_image, corner_model, piece_model, color_model):
         classes_scores = outputs[0][i][4:]
         (minScore, maxScore, minClassLoc, (x, maxClassIndex)) = cv2.minMaxLoc(classes_scores)
         if maxScore >= 0.25:
-            box = [
-                outputs[0][i][0] - (0.5 * outputs[0][i][2]), outputs[0][i][1] - (0.5 * outputs[0][i][3]),
-                outputs[0][i][2], outputs[0][i][3]]
+            box = [outputs[0][i][0] - (0.5 * outputs[0][i][2]),
+                   outputs[0][i][1] - (0.5 * outputs[0][i][3]),
+                   outputs[0][i][2],
+                   outputs[0][i][3]]
             boxes.append(box)
             scores.append(maxScore)
             class_ids.append(maxClassIndex)
@@ -120,8 +121,11 @@ def detect_board(original_image, corner_model, piece_model, color_model):
     blue_color = (255, 0, 0)
     red_color = (0, 0, 255)
 
-    top_left, top_right, bottom_left, bottom_right = [(int(point[0]), int(point[1])) for point in
-                                                      (top_left, top_right, bottom_left, bottom_right)]
+    top_left, top_right, bottom_left, bottom_right = [
+        (int(
+            point[0]), int(
+            point[1])) for point in (
+                top_left, top_right, bottom_left, bottom_right)]
 
     if rotation_count == 0:
         cv2.line(original_image, top_left, top_right, green_color, 5)

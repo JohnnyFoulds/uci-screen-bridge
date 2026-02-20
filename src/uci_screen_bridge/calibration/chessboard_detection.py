@@ -1,6 +1,7 @@
 import sys
 
 import numpy as np
+from uci_screen_bridge.utils.paths import model_path
 import cv2
 import pyautogui
 import mss
@@ -22,14 +23,15 @@ def find_chessboard():
     large_image = np.array(np.array(sct.grab(monitor)))
     large_image = cv2.cvtColor(large_image, cv2.COLOR_BGR2RGB)
     method = cv2.TM_SQDIFF_NORMED
-    white_image = cv2.imread("white.JPG")
-    black_image = cv2.imread("black.JPG")
+    white_image = cv2.imread(model_path("white.JPG"))
+    black_image = cv2.imread(model_path("black.JPG"))
     result_white = cv2.matchTemplate(white_image, large_image, method)
     result_black = cv2.matchTemplate(black_image, large_image, method)
     we_are_white = True
     result = result_white
     small_image = white_image
-    if cv2.minMaxLoc(result_black)[0] < cv2.minMaxLoc(result_white)[0]:  # If black is more accurate:
+    if cv2.minMaxLoc(result_black)[0] < cv2.minMaxLoc(
+            result_white)[0]:  # If black is more accurate:
         result = result_black
         we_are_white = False
         small_image = black_image
@@ -49,7 +51,8 @@ def auto_find_chessboard():
     sct = mss.mss()
     img = np.array(np.array(sct.grab(monitor)))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    is_found, current_chessboard_image, minX, minY, maxX, maxY, test_image = find_chessboard_from_image(img)
+    (is_found, current_chessboard_image,
+     minX, minY, maxX, maxY, test_image) = find_chessboard_from_image(img)
     if not is_found:
         sys.exit(0)
     position = Board_position(minX, minY, maxX, maxY)
@@ -103,10 +106,22 @@ def find_chessboard_from_image(img):
     image_vertical = prepare_vertical(vertical_lines)
     horizontal_lines = np.absolute(cv2.filter2D(image.astype('float'), -1, kernelV))
     image_horizontal = prepare_horizontal(horizontal_lines)
-    vertical_lines = cv2.HoughLinesP(image_vertical.astype(np.uint8), 1, np.pi / 180, 100, minLineLength=100,
-                                     maxLineGap=10)
-    horizontal_lines = cv2.HoughLinesP(image_horizontal.astype(np.uint8), 1, np.pi / 180, 100, minLineLength=100,
-                                       maxLineGap=10)
+    vertical_lines = cv2.HoughLinesP(
+        image_vertical.astype(
+            np.uint8),
+        1,
+        np.pi / 180,
+        100,
+        minLineLength=100,
+        maxLineGap=10)
+    horizontal_lines = cv2.HoughLinesP(
+        image_horizontal.astype(
+            np.uint8),
+        1,
+        np.pi / 180,
+        100,
+        minLineLength=100,
+        maxLineGap=10)
     v_count = [0 for _ in range(len(vertical_lines))]
     h_count = [0 for _ in range(len(horizontal_lines))]
     for i, line in enumerate(vertical_lines):

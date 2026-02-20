@@ -6,16 +6,28 @@ import numpy as np
 import pickle
 import os
 import sys
-from helper import detect_state, get_square_image, predict
-from internet_game import Internet_game
-from lichess_game import Lichess_game
-from commentator import Commentator_thread
-from lichess_commentator import Lichess_commentator
+from uci_screen_bridge.utils.helper import detect_state, get_square_image, predict
+from uci_screen_bridge.utils.paths import model_path, data_path
+from uci_screen_bridge.online.internet_game import Internet_game
+from uci_screen_bridge.online.lichess_game import Lichess_game
+from uci_screen_bridge.online.commentator import Commentator_thread
+from uci_screen_bridge.online.lichess_commentator import Lichess_commentator
 
 
 class Game:
-    def __init__(self, board_basics, speech_thread, use_template, make_opponent, start_delay, comment_me,
-                 comment_opponent, drag_drop, language, token, roi_mask):
+    def __init__(
+            self,
+            board_basics,
+            speech_thread,
+            use_template,
+            make_opponent,
+            start_delay,
+            comment_me,
+            comment_opponent,
+            drag_drop,
+            language,
+            token,
+            roi_mask):
         if token:
             self.internet_game = Lichess_game(token)
         else:
@@ -34,14 +46,15 @@ class Game:
         self.knn = cv2.ml.KNearest_create()
         self.features = None
         self.labels = None
-        self.save_file = 'hog.bin'
-        self.piece_model = cv2.dnn.readNetFromONNX("cnn_piece.onnx")
-        self.color_model = cv2.dnn.readNetFromONNX("cnn_color.onnx")
+        self.save_file = data_path("hog.bin")
+        self.piece_model = cv2.dnn.readNetFromONNX(model_path("cnn_piece.onnx"))
+        self.color_model = cv2.dnn.readNetFromONNX(model_path("cnn_color.onnx"))
 
         if token:
             commentator_thread = Lichess_commentator()
             commentator_thread.daemon = True
-            commentator_thread.stream = self.internet_game.client.board.stream_game_state(self.internet_game.game_id)
+            commentator_thread.stream = self.internet_game.client.board.stream_game_state(
+                self.internet_game.game_id)
             commentator_thread.speech_thread = self.speech_thread
             commentator_thread.game_state.we_play_white = self.internet_game.we_play_white
             commentator_thread.game_state.game = self
@@ -198,18 +211,17 @@ class Game:
 
     def detect_state_hog(self, chessboard_image):
         chessboard_image = cv2.cvtColor(chessboard_image, cv2.COLOR_BGR2GRAY)
-        chessboard = [[get_square_image(row, column, chessboard_image) for column in range(8)] for row
-                      in
-                      range(8)]
+        chessboard = [[get_square_image(row, column, chessboard_image)
+                       for column in range(8)] for row in range(8)]
 
-        board_hog = [[self.hog.compute(cv2.resize(chessboard[row][column], (64, 64))) for column in range(8)] for row
-                     in
-                     range(8)]
+        board_hog = [[self.hog.compute(cv2.resize(chessboard[row][column], (64, 64)))
+                      for column in range(8)] for row in range(8)]
         knn_result = []
         for row in range(8):
             knn_row = []
             for column in range(8):
-                ret, result, neighbours, dist = self.knn.findNearest(np.array([board_hog[row][column]]), k=3)
+                ret, result, neighbours, dist = self.knn.findNearest(
+                    np.array([board_hog[row][column]]), k=3)
                 knn_row.append(result[0][0])
             knn_result.append(knn_row)
         board_state = [[knn_result[row][column] > 0.5 for column in range(8)] for row
@@ -218,8 +230,8 @@ class Game:
         return board_state
 
     def get_valid_move_hog(self, fgmask, frame):
-        board = [[self.board_basics.get_square_image(row, column, fgmask).mean() for column in range(8)] for row in
-                 range(8)]
+        board = [[self.board_basics.get_square_image(
+            row, column, fgmask).mean() for column in range(8)] for row in range(8)]
         potential_squares = []
         square_scores = {}
         for row in range(8):
@@ -248,13 +260,15 @@ class Game:
                     return False, ""
         else:
             for move in self.board.legal_moves:
-                if (move.from_square in potential_squares) and (move.to_square in potential_squares):
+                if (move.from_square in potential_squares) and (
+                        move.to_square in potential_squares):
                     if move.promotion and move.promotion != chess.QUEEN:
                         continue
                     self.board.push(move)
                     if self.check_state_hog(board_result):
                         self.board.pop()
-                        total_score = square_scores[move.from_square] + square_scores[move.to_square]
+                        total_score = square_scores[move.from_square] + \
+                            square_scores[move.to_square]
                         potential_moves.append((total_score, move.uci()))
                     else:
                         self.board.pop()
@@ -335,8 +349,8 @@ class Game:
     def get_valid_move_canny(self, fgmask, frame):
         if self.roi_mask is None:
             return False, ""
-        board = [[self.board_basics.get_square_image(row, column, fgmask).mean() for column in range(8)] for row in
-                 range(8)]
+        board = [[self.board_basics.get_square_image(
+            row, column, fgmask).mean() for column in range(8)] for row in range(8)]
         potential_squares = []
         square_scores = {}
         for row in range(8):
@@ -365,13 +379,15 @@ class Game:
                     return False, ""
         else:
             for move in self.board.legal_moves:
-                if (move.from_square in potential_squares) and (move.to_square in potential_squares):
+                if (move.from_square in potential_squares) and (
+                        move.to_square in potential_squares):
                     if move.promotion and move.promotion != chess.QUEEN:
                         continue
                     self.board.push(move)
                     if self.check_state_for_move(board_result):
                         self.board.pop()
-                        total_score = square_scores[move.from_square] + square_scores[move.to_square]
+                        total_score = square_scores[move.from_square] + \
+                            square_scores[move.to_square]
                         potential_moves.append((total_score, move.uci()))
                     else:
                         self.board.pop()
@@ -385,9 +401,8 @@ class Game:
         if not success:
             success, valid_move_string = self.get_valid_move_cnn(next_frame)
             if not success:
-                potential_squares, potential_moves = self.board_basics.get_potential_moves(fgmask, previous_frame,
-                                                                                           next_frame,
-                                                                                           self.board)
+                potential_squares, potential_moves = self.board_basics.get_potential_moves(
+                    fgmask, previous_frame, next_frame, self.board)
                 success, valid_move_string = self.get_valid_move(potential_squares, potential_moves)
                 if not success:
                     success, valid_move_string = self.get_valid_move_canny(fgmask, next_frame)
@@ -450,11 +465,17 @@ class Game:
                 piece = self.board.piece_at(square)
                 if piece and (not result[row][column]):
                     print("Learning piece at " + square_name)
-                    piece_hog = self.hog.compute(cv2.resize(get_square_image(row, column, frame), (64, 64)))
+                    piece_hog = self.hog.compute(
+                        cv2.resize(
+                            get_square_image(
+                                row, column, frame), (64, 64)))
                     new_pieces.append(piece_hog)
                 if (not piece) and (result[row][column]):
                     print("Learning empty at " + square_name)
-                    square_hog = self.hog.compute(cv2.resize(get_square_image(row, column, frame), (64, 64)))
+                    square_hog = self.hog.compute(
+                        cv2.resize(
+                            get_square_image(
+                                row, column, frame), (64, 64)))
                     new_squares.append(square_hog)
         labels_pieces = np.ones((len(new_pieces), 1), np.int32)
         labels_squares = np.zeros((len(new_squares), 1), np.int32)
@@ -513,23 +534,27 @@ class Game:
         potential_squares = [square[1] for square in potential_squares]
         print(potential_squares)
         # Detect castling king side with white
-        if ("e1" in potential_squares) and ("h1" in potential_squares) and ("f1" in potential_squares) and (
-                "g1" in potential_squares) and (chess.Move.from_uci("e1g1") in self.board.legal_moves):
+        if (("e1" in potential_squares) and ("h1" in potential_squares)
+                and ("f1" in potential_squares) and ("g1" in potential_squares)
+                and (chess.Move.from_uci("e1g1") in self.board.legal_moves)):
             valid_move_string = "e1g1"
 
         # Detect castling queen side with white
-        if ("e1" in potential_squares) and ("a1" in potential_squares) and ("c1" in potential_squares) and (
-                "d1" in potential_squares) and (chess.Move.from_uci("e1c1") in self.board.legal_moves):
+        if (("e1" in potential_squares) and ("a1" in potential_squares)
+                and ("c1" in potential_squares) and ("d1" in potential_squares)
+                and (chess.Move.from_uci("e1c1") in self.board.legal_moves)):
             valid_move_string = "e1c1"
 
         # Detect castling king side with black
-        if ("e8" in potential_squares) and ("h8" in potential_squares) and ("f8" in potential_squares) and (
-                "g8" in potential_squares) and (chess.Move.from_uci("e8g8") in self.board.legal_moves):
+        if (("e8" in potential_squares) and ("h8" in potential_squares)
+                and ("f8" in potential_squares) and ("g8" in potential_squares)
+                and (chess.Move.from_uci("e8g8") in self.board.legal_moves)):
             valid_move_string = "e8g8"
 
         # Detect castling queen side with black
-        if ("e8" in potential_squares) and ("a8" in potential_squares) and ("c8" in potential_squares) and (
-                "d8" in potential_squares) and (chess.Move.from_uci("e8c8") in self.board.legal_moves):
+        if (("e8" in potential_squares) and ("a8" in potential_squares)
+                and ("c8" in potential_squares) and ("d8" in potential_squares)
+                and (chess.Move.from_uci("e8c8") in self.board.legal_moves)):
             valid_move_string = "e8c8"
 
         if move_to_register and (move_to_register.uci() != valid_move_string):
