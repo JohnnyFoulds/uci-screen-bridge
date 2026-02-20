@@ -57,31 +57,47 @@ class Board_basics:
         ssim_dark_black = max(structural_similarity(empty,
                                                     piece, channel_axis=-1) for piece, empty in
                               zip(dark_black, dark_empty))
-        self.SSIM_THRESHOLD_LIGHT_WHITE = min(self.SSIM_THRESHOLD_LIGHT_WHITE, ssim_light_white + 0.2)
-        self.SSIM_THRESHOLD_LIGHT_BLACK = min(self.SSIM_THRESHOLD_LIGHT_BLACK, ssim_light_black + 0.2)
+        self.SSIM_THRESHOLD_LIGHT_WHITE = min(
+            self.SSIM_THRESHOLD_LIGHT_WHITE, ssim_light_white + 0.2)
+        self.SSIM_THRESHOLD_LIGHT_BLACK = min(
+            self.SSIM_THRESHOLD_LIGHT_BLACK, ssim_light_black + 0.2)
         self.SSIM_THRESHOLD_DARK_WHITE = min(self.SSIM_THRESHOLD_DARK_WHITE, ssim_dark_white + 0.2)
         self.SSIM_THRESHOLD_DARK_BLACK = min(self.SSIM_THRESHOLD_DARK_BLACK, ssim_dark_black + 0.2)
         self.SSIM_THRESHOLD = max(
             [self.SSIM_THRESHOLD, self.SSIM_THRESHOLD_LIGHT_WHITE, self.SSIM_THRESHOLD_LIGHT_BLACK,
              self.SSIM_THRESHOLD_DARK_WHITE, self.SSIM_THRESHOLD_DARK_BLACK])
-        print(self.SSIM_THRESHOLD_LIGHT_WHITE, self.SSIM_THRESHOLD_LIGHT_BLACK, self.SSIM_THRESHOLD_DARK_WHITE,
-              self.SSIM_THRESHOLD_DARK_BLACK)
+        print(
+            self.SSIM_THRESHOLD_LIGHT_WHITE,
+            self.SSIM_THRESHOLD_LIGHT_BLACK,
+            self.SSIM_THRESHOLD_DARK_WHITE,
+            self.SSIM_THRESHOLD_DARK_BLACK)
         self.ssim_table = [[self.SSIM_THRESHOLD_DARK_BLACK, self.SSIM_THRESHOLD_DARK_WHITE],
                            [self.SSIM_THRESHOLD_LIGHT_BLACK, self.SSIM_THRESHOLD_LIGHT_WHITE]]
 
         outfile = open(self.save_file, 'wb')
-        pickle.dump((self.SSIM_THRESHOLD_LIGHT_WHITE, self.SSIM_THRESHOLD_LIGHT_BLACK, self.SSIM_THRESHOLD_DARK_WHITE,
-                     self.SSIM_THRESHOLD_DARK_BLACK, self.SSIM_THRESHOLD), outfile)
+        pickle.dump(
+            (self.SSIM_THRESHOLD_LIGHT_WHITE,
+             self.SSIM_THRESHOLD_LIGHT_BLACK,
+             self.SSIM_THRESHOLD_DARK_WHITE,
+             self.SSIM_THRESHOLD_DARK_BLACK,
+             self.SSIM_THRESHOLD),
+            outfile)
         outfile.close()
 
     def load_ssim(self):
         if os.path.exists(self.save_file):
             infile = open(self.save_file, 'rb')
-            (self.SSIM_THRESHOLD_LIGHT_WHITE, self.SSIM_THRESHOLD_LIGHT_BLACK, self.SSIM_THRESHOLD_DARK_WHITE,
-             self.SSIM_THRESHOLD_DARK_BLACK, self.SSIM_THRESHOLD) = pickle.load(infile)
+            (self.SSIM_THRESHOLD_LIGHT_WHITE,
+             self.SSIM_THRESHOLD_LIGHT_BLACK,
+             self.SSIM_THRESHOLD_DARK_WHITE,
+             self.SSIM_THRESHOLD_DARK_BLACK,
+             self.SSIM_THRESHOLD) = pickle.load(infile)
             infile.close()
-            print(self.SSIM_THRESHOLD_LIGHT_WHITE, self.SSIM_THRESHOLD_LIGHT_BLACK, self.SSIM_THRESHOLD_DARK_WHITE,
-                  self.SSIM_THRESHOLD_DARK_BLACK)
+            print(
+                self.SSIM_THRESHOLD_LIGHT_WHITE,
+                self.SSIM_THRESHOLD_LIGHT_BLACK,
+                self.SSIM_THRESHOLD_DARK_WHITE,
+                self.SSIM_THRESHOLD_DARK_BLACK)
             self.ssim_table = [[self.SSIM_THRESHOLD_DARK_BLACK, self.SSIM_THRESHOLD_DARK_WHITE],
                                [self.SSIM_THRESHOLD_LIGHT_BLACK, self.SSIM_THRESHOLD_LIGHT_WHITE]]
         else:
@@ -159,11 +175,12 @@ class Board_basics:
                 return False
 
     def get_potential_moves(self, fgmask, previous_frame, next_frame, chessboard):
-        board = [[self.get_square_image(row, column, fgmask).mean() for column in range(8)] for row in range(8)]
-        previous_board = [[self.get_square_image(row, column, previous_frame) for column in range(8)] for row in
-                          range(8)]
-        next_board = [[self.get_square_image(row, column, next_frame) for column in range(8)] for row in
-                      range(8)]
+        board = [[self.get_square_image(row, column, fgmask).mean()
+                  for column in range(8)] for row in range(8)]
+        previous_board = [[self.get_square_image(
+            row, column, previous_frame) for column in range(8)] for row in range(8)]
+        next_board = [[self.get_square_image(row, column, next_frame)
+                       for column in range(8)] for row in range(8)]
         potential_squares = []
         for row in range(8):
             for column in range(8):
@@ -205,10 +222,12 @@ class Board_basics:
             else:
                 continue
             start_region = self.square_region(start_row, start_column)
-            for arrival_square_score, arrival_row, arrival_column, arrival_ssim in potential_squares:
+            for (arrival_square_score,
+                 arrival_row, arrival_column, arrival_ssim) in potential_squares:
                 if (start_row, start_column) == (arrival_row, arrival_column):
                     continue
-                arrival_square_name = self.convert_row_column_to_square_name(arrival_row, arrival_column)
+                arrival_square_name = self.convert_row_column_to_square_name(
+                    arrival_row, arrival_column)
                 arrival_square = chess.parse_square(arrival_square_name)
                 arrival_piece = chessboard.piece_at(arrival_square)
                 if arrival_piece:
@@ -222,7 +241,8 @@ class Board_basics:
                 arrival_region = self.square_region(arrival_row, arrival_column)
                 region = start_region.union(arrival_region)
                 total_square_score = sum(
-                    board[row][column] for row, column in region) + start_square_score + arrival_square_score
+                    board[row][column] for row,
+                    column in region) + start_square_score + arrival_square_score
                 potential_moves.append(
                     (total_square_score, start_square_name, arrival_square_name))
 

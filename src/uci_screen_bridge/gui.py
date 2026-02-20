@@ -18,15 +18,16 @@ def main():
 
     def lichess():
         nonlocal token
-        new_token = askstring("Lichess API Access Token", "Please enter your Lichess API Access Token below.",
-                              initialvalue=token)
+        new_token = askstring(
+            "Lichess API Access Token",
+            "Please enter your Lichess API Access Token below.",
+            initialvalue=token)
         if new_token is None:
             pass
         else:
             token = new_token
 
     def on_closing():
-        nonlocal running_process
         if running_process:
             if running_process.poll() is None:
                 running_process.terminate()
@@ -34,7 +35,6 @@ def main():
         window.destroy()
 
     def log_process(process, finish_message):
-        nonlocal running_process
         button_stop = tk.Button(button_frame, text="Stop", command=stop_process)
         button_stop.grid(row=0, column=0, columnspan=3, sticky="ew")
         while True:
@@ -93,7 +93,11 @@ def main():
             )
             return
 
-        arguments = [sys.executable, "-m", "uci_screen_bridge.calibration.board_calibration", "show-info"]
+        arguments = [
+            sys.executable,
+            "-m",
+            "uci_screen_bridge.calibration.board_calibration",
+            "show-info"]
         selected_camera = camera.get()
         if selected_camera != OPTIONS[0]:
             cap_index = OPTIONS.index(selected_camera) - 1
@@ -116,7 +120,7 @@ def main():
         log_thread.start()
 
     def start_game(ignore=None):
-        nonlocal running_process, token
+        nonlocal running_process
         arguments = [sys.executable, "-m", "uci_screen_bridge.main"]
         if no_template.get():
             arguments.append("no-template")
@@ -154,9 +158,11 @@ def main():
             language = "English"
             languages = ["English", "German", "Russian", "Turkish", "Italian", "French"]
             codes = ["en_", "de_", "ru_", "tr_", "it_", "fr_"]
-            for l, c in zip(languages, codes):
-                if (l in selected_voice) or (l.lower() in selected_voice) or (c in selected_voice):
-                    language = l
+            for lang, c in zip(languages, codes):
+                if (lang in selected_voice
+                        or lang.lower() in selected_voice
+                        or c in selected_voice):
+                    language = lang
                     break
             arguments.append("lang=" + language)
 
@@ -192,7 +198,8 @@ def main():
 
         platform_name = platform.system()
         if platform_name == "Darwin":
-            cmd = 'system_profiler SPCameraDataType | grep "^    [^ ]" | sed "s/    //" | sed "s/://"'
+            cmd = ('system_profiler SPCameraDataType'
+                   ' | grep "^    [^ ]" | sed "s/    //" | sed "s/://"')
             result = subprocess.check_output(cmd, shell=True)
             result = result.decode()
             result = [r for r in result.split("\n") if r]
@@ -207,7 +214,7 @@ def main():
             from pygrabber.dshow_graph import FilterGraph
 
             OPTIONS.extend(FilterGraph().get_input_devices())
-    except:
+    except BaseException:
         pass
     camera.set(OPTIONS[0])
     label = tk.Label(menu_frame, text='Select Webcam:')
@@ -219,7 +226,13 @@ def main():
     resolution_frame = tk.Frame(window)
     resolution_frame.grid(row=1, column=0, columnspan=2, sticky="W")
     resolution = tk.StringVar()
-    RESOLUTION_OPTIONS = ["Default", "640 x 480", "1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160"]
+    RESOLUTION_OPTIONS = [
+        "Default",
+        "640 x 480",
+        "1280 x 720",
+        "1920 x 1080",
+        "2560 x 1440",
+        "3840 x 2160"]
     resolution.set(RESOLUTION_OPTIONS[0])
     resolution_label = tk.Label(resolution_frame, text='Select Webcam Resolution:')
     resolution_label.grid(column=0, row=0, sticky=tk.W)
@@ -270,7 +283,7 @@ def main():
             engine = pyttsx3.init()
             for v in engine.getProperty('voices'):
                 VOICE_OPTIONS.append(v.name)
-    except:
+    except BaseException:
         pass
     voice.set(VOICE_OPTIONS[0])
     voice_label = tk.Label(voice_frame, text='Select Voice:')
@@ -299,7 +312,10 @@ def main():
     promotion_menu.grid(column=1, row=0, sticky=tk.W)
     promotion_menu.configure(state="disabled")
 
-    c = tk.Checkbutton(window, text="Find chess board of online game without template images.", variable=no_template)
+    c = tk.Checkbutton(
+        window,
+        text="Find chess board of online game without template images.",
+        variable=no_template)
     c.grid(row=6, column=0, sticky="W", columnspan=1)
 
     c1 = tk.Checkbutton(window, text="Make moves of opponent too.", variable=make_opponent)
@@ -314,10 +330,15 @@ def main():
     c3 = tk.Checkbutton(window, text="Speak opponent's moves.", variable=comment_opponent)
     c3.grid(row=10, column=0, sticky="W", columnspan=1)
 
-    values = ["Do not delay game start.", "1 second delayed game start."] + [str(i) + " seconds delayed game start." for i
-                                                                             in range(2, 6)]
+    values = ["Do not delay game start.", "1 second delayed game start."] + \
+        [str(i) + " seconds delayed game start." for i in range(2, 6)]
     default_value = tk.StringVar()
-    s = tk.Spinbox(window, values=values, textvariable=default_value, width=max(len(value) for value in values))
+    s = tk.Spinbox(
+        window,
+        values=values,
+        textvariable=default_value,
+        width=max(
+            len(value) for value in values))
     default_value.set(values[-1])
     s.grid(row=11, column=0, sticky="W", columnspan=2)
     button_frame = tk.Frame(window)
@@ -336,8 +357,18 @@ def main():
     scroll_bar.pack(side=tk.RIGHT, fill=tk.Y)
     logs_text.pack(side="left")
 
-    fields = [no_template, make_opponent, comment_me, comment_opponent, calibration_mode, resolution, fps, drag_drop,
-              default_value, camera, voice]
+    fields = [
+        no_template,
+        make_opponent,
+        comment_me,
+        comment_opponent,
+        calibration_mode,
+        resolution,
+        fps,
+        drag_drop,
+        default_value,
+        camera,
+        voice]
 
     def save_settings():
         outfile = open(save_file, 'wb')

@@ -12,7 +12,9 @@ from uci_screen_bridge.detection.board_basics import Board_basics
 from uci_screen_bridge.utils.helper import perspective_transform
 from uci_screen_bridge.utils.speech import Speech_thread
 from uci_screen_bridge.utils.videocapture import Video_capture_thread
-from uci_screen_bridge.utils.languages import *
+from uci_screen_bridge.utils.languages import (
+    English, German, Russian, Turkish, Italian, French
+)
 
 if __name__ == "__main__":
     webcam_width = None
@@ -99,13 +101,13 @@ if __name__ == "__main__":
         color_model = cv2.dnn.readNetFromONNX(model_path("cnn_color.onnx"))
         for _ in range(10):
             ret, frame = video_capture_thread.capture.read()
-            if ret == False:
+            if not ret:
                 print("Error reading frame. Please check your webcam connection.")
                 continue
         is_detected = False
         for _ in range(100):
             ret, frame = video_capture_thread.capture.read()
-            if ret == False:
+            if not ret:
                 print("Error reading frame. Please check your webcam connection.")
                 continue
             result = detect_board(frame, corner_model, piece_model, color_model)
@@ -138,8 +140,18 @@ if __name__ == "__main__":
     speech_thread.index = voice_index
     speech_thread.start()
 
-    game = Game(board_basics, speech_thread, use_template, make_opponent, start_delay, comment_me, comment_opponent,
-                drag_drop, language, token, roi_mask)
+    game = Game(
+        board_basics,
+        speech_thread,
+        use_template,
+        make_opponent,
+        start_delay,
+        comment_me,
+        comment_opponent,
+        drag_drop,
+        language,
+        token,
+        roi_mask)
 
     def waitUntilMotionCompletes():
         counter = 0
@@ -223,7 +235,8 @@ if __name__ == "__main__":
             last_frame = stabilize_background_subtractors()
             previous_frame = previous_frame_queue[0]
 
-            if (game.is_light_change(last_frame) == False) and game.register_move(fgmask, previous_frame, last_frame):
+            if not game.is_light_change(last_frame) and game.register_move(
+                    fgmask, previous_frame, last_frame):
                 pass
             else:
                 pass

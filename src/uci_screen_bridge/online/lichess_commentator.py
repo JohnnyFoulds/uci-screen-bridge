@@ -15,9 +15,14 @@ class Lichess_commentator(Thread):
 
     def run(self):
         while not self.game_state.board.is_game_over():
-            is_my_turn = (self.game_state.we_play_white) == (self.game_state.board.turn == chess.WHITE)
+            is_my_turn = (
+                self.game_state.we_play_white) == (
+                self.game_state.board.turn == chess.WHITE)
             found_move, move = self.game_state.register_move_if_needed(self.stream)
-            if found_move and ((self.comment_me and is_my_turn) or (self.comment_opponent and (not is_my_turn))):
+            if found_move and (
+                (self.comment_me and is_my_turn) or (
+                    self.comment_opponent and (
+                        not is_my_turn))):
                 self.speech_thread.put_text(self.language.comment(self.game_state.board, move))
 
 

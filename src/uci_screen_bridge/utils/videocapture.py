@@ -12,7 +12,7 @@ class Video_capture_thread(Thread):
     def run(self):
         while True:
             ret, frame = self.capture.read()
-            if ret == False:
+            if not ret:
                 continue
             self.queue.put(frame)
 

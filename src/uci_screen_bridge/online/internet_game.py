@@ -44,13 +44,14 @@ class Internet_game:
     def convert_square_name_to_row_column(self, square_name, is_white_on_bottom):
         for row in range(8):
             for column in range(8):
-                this_square_name = self.convert_row_column_to_square_name(row, column, is_white_on_bottom)
+                this_square_name = self.convert_row_column_to_square_name(
+                    row, column, is_white_on_bottom)
                 if this_square_name == square_name:
                     return row, column
         return 0, 0
 
     def convert_row_column_to_square_name(self, row, column, is_white_on_bottom):
-        if is_white_on_bottom == True:
+        if is_white_on_bottom:
             number = repr(8 - row)
             letter = str(chr(97 + column))
             return letter + number

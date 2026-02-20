@@ -15,7 +15,8 @@ class Lichess_game:
             print("No games found. Please create your game on Lichess.")
             sys.exit(0)
         if len(games) > 1:
-            print("Multiple games found. Please make sure there is only one ongoing game on Lichess.")
+            print("Multiple games found. "
+                  "Please make sure there is only one ongoing game on Lichess.")
             sys.exit(0)
         game = games[0]
         self.we_play_white = game['color'] == 'white'
@@ -40,7 +41,7 @@ class Lichess_game:
         move_string = move.uci()
         try:
             self.client.board.make_move(self.game_id, move_string)
-        except:
+        except BaseException:
             session = berserk.TokenSession(self.token)
             self.client = berserk.Client(session)
             self.client.board.make_move(self.game_id, move_string)

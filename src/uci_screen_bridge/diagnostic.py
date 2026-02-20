@@ -113,8 +113,10 @@ if __name__ == "__main__":
 
     root = tk.Tk()
     root.withdraw()
-    messagebox.showinfo("Diagnostic",
-                        "The diagnostic process will start. It will mark white pieces with a blue circle and black pieces with a green circle. Press the 'q' key to exit.")
+    messagebox.showinfo(
+        "Diagnostic",
+        "The diagnostic process will start. It will mark white pieces with a blue circle "
+        "and black pieces with a green circle. Press the 'q' key to exit.")
 
     while True:
         ret, frame = cap.read()

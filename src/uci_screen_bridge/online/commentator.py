@@ -25,9 +25,14 @@ class Commentator_thread(Thread):
         self.game_state.classifier = Classifier(self.game_state)
 
         while not self.game_state.board.is_game_over():
-            is_my_turn = (self.game_state.we_play_white) == (self.game_state.board.turn == chess.WHITE)
+            is_my_turn = (
+                self.game_state.we_play_white) == (
+                self.game_state.board.turn == chess.WHITE)
             found_move, move = self.game_state.register_move_if_needed()
-            if found_move and ((self.comment_me and is_my_turn) or (self.comment_opponent and (not is_my_turn))):
+            if found_move and (
+                (self.comment_me and is_my_turn) or (
+                    self.comment_opponent and (
+                        not is_my_turn))):
                 self.speech_thread.put_text(self.language.comment(self.game_state.board, move))
 
 
@@ -51,8 +56,9 @@ class Game_state:
         img = np.array(np.array(self.sct.grab(monitor)))
         image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         dim = (800, 800)
-        resizedChessBoard = cv2.resize(image[position.minY:position.maxY, position.minX:position.maxX], dim,
-                                       interpolation=cv2.INTER_AREA)
+        resizedChessBoard = cv2.resize(
+            image[position.minY:position.maxY, position.minX:position.maxX],
+            dim, interpolation=cv2.INTER_AREA)
         return resizedChessBoard
 
     def get_square_image(self, row, column,
@@ -73,9 +79,9 @@ class Game_state:
             row = chess.square_rank(square)
             column = chess.square_file(square)
             piece = self.board.piece_at(square)
-            shouldBeEmpty = (piece == None)
+            shouldBeEmpty = (piece is None)
 
-            if self.we_play_white == True:
+            if self.we_play_white:
                 rowOnImage = 7 - row
                 columnOnImage = column
             else:
@@ -105,7 +111,7 @@ class Game_state:
             column = chess.square_file(square)
             piece = self.board.piece_at(square)
 
-            if self.we_play_white == True:
+            if self.we_play_white:
                 rowOnImage = 7 - row
                 columnOnImage = column
             else:
@@ -131,7 +137,7 @@ class Game_state:
                 uci_move = start + arrival
                 try:
                     move = chess.Move.from_uci(uci_move)
-                except:
+                except BaseException:
                     continue
 
                 if move in self.board.legal_moves:
@@ -150,31 +156,39 @@ class Game_state:
                             valid_move_string = uci_move_promoted
 
         # Detect castling king side with white
-        if ("e1" in potential_starts) and ("h1" in potential_starts) and ("f1" in potential_arrivals) and (
-                "g1" in potential_arrivals) and (chess.Move.from_uci("e1g1") in self.board.legal_moves):
-            if (self.board.peek() != chess.Move.from_uci("e1g1")) and \
-                    self.can_image_correspond_to_chessboard(chess.Move.from_uci("e1g1"), result):
+        if (("e1" in potential_starts) and ("h1" in potential_starts)
+                and ("f1" in potential_arrivals) and ("g1" in potential_arrivals)
+                and (chess.Move.from_uci("e1g1") in self.board.legal_moves)):
+            if (self.board.peek() != chess.Move.from_uci("e1g1")
+                    and self.can_image_correspond_to_chessboard(
+                        chess.Move.from_uci("e1g1"), result)):
                 valid_move_string = "e1g1"
 
         # Detect castling queen side with white
-        if ("e1" in potential_starts) and ("a1" in potential_starts) and ("c1" in potential_arrivals) and (
-                "d1" in potential_arrivals) and (chess.Move.from_uci("e1c1") in self.board.legal_moves):
-            if (self.board.peek() != chess.Move.from_uci("e1c1")) and \
-                    self.can_image_correspond_to_chessboard(chess.Move.from_uci("e1c1"), result):
+        if (("e1" in potential_starts) and ("a1" in potential_starts)
+                and ("c1" in potential_arrivals) and ("d1" in potential_arrivals)
+                and (chess.Move.from_uci("e1c1") in self.board.legal_moves)):
+            if (self.board.peek() != chess.Move.from_uci("e1c1")
+                    and self.can_image_correspond_to_chessboard(
+                        chess.Move.from_uci("e1c1"), result)):
                 valid_move_string = "e1c1"
 
         # Detect castling king side with black
-        if ("e8" in potential_starts) and ("h8" in potential_starts) and ("f8" in potential_arrivals) and (
-                "g8" in potential_arrivals) and (chess.Move.from_uci("e8g8") in self.board.legal_moves):
-            if (self.board.peek() != chess.Move.from_uci("e8g8")) and self.can_image_correspond_to_chessboard(
-                    chess.Move.from_uci("e8g8"), result):
+        if (("e8" in potential_starts) and ("h8" in potential_starts)
+                and ("f8" in potential_arrivals) and ("g8" in potential_arrivals)
+                and (chess.Move.from_uci("e8g8") in self.board.legal_moves)):
+            if (self.board.peek() != chess.Move.from_uci("e8g8")
+                    and self.can_image_correspond_to_chessboard(
+                        chess.Move.from_uci("e8g8"), result)):
                 valid_move_string = "e8g8"
 
         # Detect castling queen side with black
-        if ("e8" in potential_starts) and ("a8" in potential_starts) and ("c8" in potential_arrivals) and (
-                "d8" in potential_arrivals) and (chess.Move.from_uci("e8c8") in self.board.legal_moves):
-            if (self.board.peek() != chess.Move.from_uci("e8c8")) and self.can_image_correspond_to_chessboard(
-                    chess.Move.from_uci("e8c8"), result):
+        if (("e8" in potential_starts) and ("a8" in potential_starts)
+                and ("c8" in potential_arrivals) and ("d8" in potential_arrivals)
+                and (chess.Move.from_uci("e8c8") in self.board.legal_moves)):
+            if (self.board.peek() != chess.Move.from_uci("e8c8")
+                    and self.can_image_correspond_to_chessboard(
+                        chess.Move.from_uci("e8c8"), result)):
                 valid_move_string = "e8c8"
 
         if not valid_move_string:  # Search for premove
@@ -228,7 +242,8 @@ class Game_state:
 
     def register_move_if_needed(self):
         new_board = self.get_chessboard()
-        potential_starts, potential_arrivals = self.get_potential_moves(self.previous_chessboard_image, new_board)
+        potential_starts, potential_arrivals = self.get_potential_moves(
+            self.previous_chessboard_image, new_board)
 
         valid_move_string1 = self.get_valid_move(potential_starts, potential_arrivals, new_board)
 
@@ -236,8 +251,10 @@ class Game_state:
             time.sleep(0.1)
             # Check that we were not in the middle of a move animation
             new_board = self.get_chessboard()
-            potential_starts, potential_arrivals = self.get_potential_moves(self.previous_chessboard_image, new_board)
-            valid_move_string2 = self.get_valid_move(potential_starts, potential_arrivals, new_board)
+            potential_starts, potential_arrivals = self.get_potential_moves(
+                self.previous_chessboard_image, new_board)
+            valid_move_string2 = self.get_valid_move(
+                potential_starts, potential_arrivals, new_board)
             if valid_move_string2 != valid_move_string1:
                 return False, "The move has changed"
             valid_move_UCI = chess.Move.from_uci(valid_move_string1)

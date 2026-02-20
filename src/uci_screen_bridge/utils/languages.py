@@ -228,7 +228,8 @@ class Turkish:
             comment += " alır"
             comment += " " + to_square + "'" + self.capture_suffix(to_square)
         else:
-            comment += "'" + self.from_suffix(from_square) + " " + to_square + "'" + self.to_suffix(to_square)
+            comment += "'" + self.from_suffix(from_square) + " " + \
+                to_square + "'" + self.to_suffix(to_square)
 
         if promotion:
             comment += " "

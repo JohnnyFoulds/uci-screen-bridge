@@ -4,7 +4,9 @@ from math import inf
 import pickle
 
 from uci_screen_bridge.calibration.board_calibration_machine_learning import detect_board
-from uci_screen_bridge.utils.helper import rotateMatrix, perspective_transform, edge_detection, euclidean_distance
+from uci_screen_bridge.utils.helper import (
+    rotateMatrix, perspective_transform, edge_detection, euclidean_distance
+)
 from uci_screen_bridge.utils.paths import model_path, data_path
 import numpy as np
 import sys
@@ -79,8 +81,11 @@ if __name__ == "__main__":
     if show_info:
         root = tk.Tk()
         root.withdraw()
-        messagebox.showinfo("Board Calibration",
-                            'Board calibration will start. It should detect corners of the chess board almost immediately. If it does not, you should press key "q" to stop board calibration and change webcam/board position.')
+        messagebox.showinfo(
+            "Board Calibration",
+            'Board calibration will start. It should detect corners of the chess board almost '
+            'immediately. If it does not, you should press key "q" to stop board calibration '
+            'and change webcam/board position.')
 
     cap = cv2.VideoCapture(cap_index, cap_api)
     if webcam_width is not None:
@@ -97,13 +102,13 @@ if __name__ == "__main__":
 
     for _ in range(10):
         ret, frame = cap.read()
-        if ret == False:
+        if not ret:
             print("Error reading frame. Please check your webcam connection.")
             continue
 
     while True:
         ret, frame = cap.read()
-        if ret == False:
+        if not ret:
             print("Error reading frame. Please check your webcam connection.")
             continue
         if is_machine_learning:
@@ -111,7 +116,8 @@ if __name__ == "__main__":
             if result:
                 pts1, side_view_compensation, rotation_count = result
                 outfile = open(filename, 'wb')
-                pickle.dump([is_machine_learning, [pts1, side_view_compensation, rotation_count]], outfile)
+                pickle.dump(
+                    [is_machine_learning, [pts1, side_view_compensation, rotation_count]], outfile)
                 outfile.close()
                 if show_info:
                     if platform_name == "Darwin":
@@ -139,8 +145,13 @@ if __name__ == "__main__":
                     if platform_name == "Darwin":
                         root = tk.Tk()
                         root.withdraw()
-                    messagebox.showinfo("Chess Board Detected",
-                                        'Please check that corners of your chess board are correctly detected. The square covered by points (0,0), (0,1),(1,0) and (1,1) should be a8. You can rotate the image by pressing key "r" to adjust that. Press key "q" to save detected chess board corners and finish board calibration.')
+                    messagebox.showinfo(
+                        "Chess Board Detected",
+                        'Please check that corners of your chess board are correctly detected. '
+                        'The square covered by points (0,0), (0,1),(1,0) and (1,1) should be a8. '
+                        'You can rotate the image by pressing key "r" to adjust that. '
+                        'Press key "q" to save detected chess board corners '
+                        'and finish board calibration.')
                     root.destroy()
                 if corners[0][0][0] > corners[-1][0][0]:  # corners returned in reverse order
                     corners = corners[::-1]
@@ -200,12 +211,13 @@ if __name__ == "__main__":
 
                 augmented_corners.append(row)
 
-                while augmented_corners[0][0][0] > augmented_corners[8][8][0] or augmented_corners[0][0][1] > \
-                        augmented_corners[8][8][1]:
+                while (augmented_corners[0][0][0] > augmented_corners[8][8][0]
+                       or augmented_corners[0][0][1] > augmented_corners[8][8][1]):
                     rotateMatrix(augmented_corners)
 
-                pts1 = np.float32([list(augmented_corners[0][0]), list(augmented_corners[8][0]), list(augmented_corners[0][8]),
-                                   list(augmented_corners[8][8])])
+                pts1 = np.float32([
+                    list(augmented_corners[0][0]), list(augmented_corners[8][0]),
+                    list(augmented_corners[0][8]), list(augmented_corners[8][8])])
                 empty_board = perspective_transform(frame, pts1)
                 edges = edge_detection(empty_board)
                 kernel = np.ones((7, 7), np.uint8)
@@ -218,7 +230,12 @@ if __name__ == "__main__":
 
                 rotation_count = 0
                 while True:
-                    cv2.imshow('frame', mark_corners(frame.copy(), augmented_corners, rotation_count))
+                    cv2.imshow(
+                        'frame',
+                        mark_corners(
+                            frame.copy(),
+                            augmented_corners,
+                            rotation_count))
                     response = cv2.waitKey(0)
                     if response & 0xFF == ord('r'):
                         rotation_count += 1
@@ -254,5 +271,6 @@ if __name__ == "__main__":
     print("Rotation count " + str(rotation_count))
 
     outfile = open(filename, 'wb')
-    pickle.dump([is_machine_learning, [augmented_corners, side_view_compensation, rotation_count, roi_mask]], outfile)
+    pickle.dump([is_machine_learning, [augmented_corners,
+                side_view_compensation, rotation_count, roi_mask]], outfile)
     outfile.close()
