@@ -4,7 +4,7 @@ SHELL=/bin/bash
 PROJECT_PATH := "."
 VENV_NAME := "uci-screen-bridge"
 
-.PHONY: install-miniconda create-venv
+.PHONY: install-miniconda create-venv install venv clean
 
 
 # install miniconda
@@ -18,6 +18,16 @@ install-miniconda:
 		rm -f Miniconda3-latest-Linux-x86_64.sh; \
 		echo "Miniconda installed."; \
 	}
+
+# install the package in editable mode
+install:
+	pip install -e .
+
+# remove and recreate the conda environment from scratch
+clean:
+	@echo "Removing conda environment $(VENV_NAME)..." && \
+	conda env remove -n $(VENV_NAME) --yes && \
+	$(MAKE) venv
 
 # create the virtual environment
 venv: install-miniconda

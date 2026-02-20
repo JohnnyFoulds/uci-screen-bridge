@@ -13,10 +13,14 @@ class Classifier:
         self.edges = cv2.Canny(self.img, 100, 200)
         self.inverted_edges = cv2.bitwise_not(self.edges)
         self.dist = cv2.distanceTransform(self.inverted_edges, cv2.DIST_L2, 3)
-        self.dist_board = [[self.get_square_image(row, column, self.dist) for column in range(8)] for row in range(8)]
-        self.edge_board = [[self.get_square_image(row, column, self.edges) for column in range(8)] for row in range(8)]
-        self.gradient_x = [[self.get_square_image(row, column, self.img_x) for column in range(8)] for row in range(8)]
-        self.gradient_y = [[self.get_square_image(row, column, self.img_y) for column in range(8)] for row in range(8)]
+        self.dist_board = [[self.get_square_image(
+            row, column, self.dist) for column in range(8)] for row in range(8)]
+        self.edge_board = [[self.get_square_image(
+            row, column, self.edges) for column in range(8)] for row in range(8)]
+        self.gradient_x = [[self.get_square_image(
+            row, column, self.img_x) for column in range(8)] for row in range(8)]
+        self.gradient_y = [[self.get_square_image(
+            row, column, self.img_y) for column in range(8)] for row in range(8)]
 
         def intensity(x):
             return self.edge_board[x[0]][x[1]].mean()
@@ -33,8 +37,9 @@ class Classifier:
             self.templates[2][1] = (7, 6)
 
         self.piece_symbol = [".", "p", "r", "n", "b", "q", "k"]
-        if game_state.we_play_white == False:
-            self.piece_symbol[-1], self.piece_symbol[-2] = self.piece_symbol[-2], self.piece_symbol[-1]
+        if not game_state.we_play_white:
+            self.piece_symbol[-1], self.piece_symbol[-2] = (
+                self.piece_symbol[-2], self.piece_symbol[-1])
 
     def classify(self, img):
         img = cv2.resize(img, self.dim,
@@ -44,9 +49,12 @@ class Classifier:
         edges = cv2.Canny(img, 100, 200)
         inverted_edges = cv2.bitwise_not(edges)
         dist = cv2.distanceTransform(inverted_edges, cv2.DIST_L2, 3)
-        dist_board = [[self.get_square_image(row, column, dist) for column in range(8)] for row in range(8)]
-        gradient_x = [[self.get_square_image(row, column, img_x) for column in range(8)] for row in range(8)]
-        gradient_y = [[self.get_square_image(row, column, img_y) for column in range(8)] for row in range(8)]
+        dist_board = [[self.get_square_image(row, column, dist)
+                       for column in range(8)] for row in range(8)]
+        gradient_x = [[self.get_square_image(row, column, img_x)
+                       for column in range(8)] for row in range(8)]
+        gradient_y = [[self.get_square_image(row, column, img_y)
+                       for column in range(8)] for row in range(8)]
 
         result = []
         for row in range(8):
@@ -62,7 +70,9 @@ class Classifier:
                         e_c = e.sum()
                         r_d = np.multiply(d, e).sum() / e_c
 
-                        dp = np.multiply(self.gradient_x[tr][tc], gradient_x[row][col]) + np.multiply(
+                        dp = np.multiply(
+                            self.gradient_x[tr][tc],
+                            gradient_x[row][col]) + np.multiply(
                             self.gradient_y[tr][tc],
                             gradient_y[row][col])
                         dp = np.abs(dp)
