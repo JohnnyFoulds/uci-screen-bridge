@@ -202,7 +202,6 @@ Run with: `make test` (headless) or `make test-full` (all tiers).
 | Module | What it does | Used for |
 |--------|-------------|----------|
 | `calibration/chessboard_detection.py` → `auto_find_chessboard()` | Hough-line board detection; returns `Board_position(minX,minY,maxX,maxY)` and `we_play_white` | Default board location at startup |
-| `online/commentator.py` → `Game_state` | Captures board region via mss, diffs square images, validates moves against `python-chess` legality, handles castling/promotion/premove | Opponent move detection |
 | `detection/classifier.py` → `Classifier` | Oriented Chamfer Matching to identify piece type per square (needed by `Game_state.get_valid_move()`) | Piece classification during move validation |
 | `utils/paths.py` | `model_path()`, `data_path()` | All asset/data file resolution |
 
@@ -212,6 +211,7 @@ Run with: `make test` (headless) or `make test-full` (all tiers).
 
 | Module | Reusable part | Change needed |
 |--------|--------------|---------------|
+| `online/commentator.py` → `Game_state` | Core CV pipeline: screenshot → square diff → OCM classification → chess legality (opponent move detection) | Needs `game_thread` stub injected (see Section 6.5) |
 | `online/commentator.py` → `Commentator_thread` | `Game_state` inner class is the real logic | The thread wrapper needs to be replaced with a call-on-demand pattern driven by UCI `go` commands |
 | `calibration/chessboard_detection.py` → `find_chessboard()` | Board location logic (template variant) | Only invoked when `CalibrationMethod = Template`; save/load board position to/from `data/board_position.bin` |
 | `online/internet_game.py` → `Internet_game` | Maps UCI move string to screen coordinates, executes PyAutoGUI click/drag | Needs a thin `DirectInternetGame` subclass (see Section 6.6) to bypass the GUI-specific `__init__`; mark as "needs thin subclass" |
@@ -417,6 +417,13 @@ class MoveDetector:
         """Call at go time. Captures the current board state as reference.
         After bestmove is returned, call set_baseline() again at the next go
         so the new board position becomes the reference for the next turn."""
+        # Inject a stub game_thread to satisfy Game_state's premove-detection
+        # check in register_move_if_needed(). Premove detection is not needed in
+        # the UCI context — the UCI protocol guarantees turn order. The stub
+        # prevents AttributeError on self.game_thread.played_moves.
+        class _GameThreadStub:
+            played_moves = []
+        self.game_state.game_thread = _GameThreadStub()
         self.game_state.previous_chessboard_image = self.game_state.get_chessboard()
         self.game_state.classifier = Classifier(self.game_state)
 
@@ -434,6 +441,8 @@ class MoveDetector:
 ```
 
 **Baseline lifecycle:** `set_baseline()` is called once per `go` command, immediately before the scan loop starts. The baseline image (`previous_chessboard_image`) persists through the entire wait. After `bestmove` is returned, `set_baseline()` is called again at the start of the *next* `go` command, ensuring the post-move board state becomes the new reference. `Game_state.register_move()` updates `previous_chessboard_image` internally after each registered move — this is the same mechanism used in the existing webcam game loop.
+
+**`game_thread` stub:** `Game_state.register_move_if_needed()` checks `self.game_thread.played_moves` for premove detection. In the UCI bridge, premove detection is unnecessary (the UCI protocol enforces turn order). A stub object with an empty `played_moves = []` list is injected once in `set_baseline()` to prevent `AttributeError`. This is intentional, not a hack — premove is explicitly out of scope.
 
 ### 6.6 `screen/executor.py` — MoveExecutor
 
@@ -467,11 +476,22 @@ class MoveExecutor:
 ```python
 SAVE_FILE = data_path("board_position.bin")
 
+class BoardNotFoundError(Exception):
+    pass
+
 def detect_and_save(method="auto"):
+    """Detects the board on screen and saves position to disk.
+
+    Raises BoardNotFoundError if no chess board is detected.
+    """
     if method == "template":
         position, we_play_white = find_chessboard()
     else:
         position, we_play_white = auto_find_chessboard()
+
+    if position is None:
+        raise BoardNotFoundError("No chess board detected on screen")
+
     with open(SAVE_FILE, 'wb') as f:
         pickle.dump((position, we_play_white), f)
     return position, we_play_white
@@ -483,9 +503,31 @@ def load():
         return pickle.load(f)
 ```
 
+> `auto_find_chessboard()` was modified to return `(None, None)` instead of calling
+> `sys.exit(0)` on failure. `detect_and_save()` checks for `None` and raises
+> `BoardNotFoundError`, which `UCIEngine._handle_isready()` catches to emit
+> `info string ERROR: chess board not found on screen`.
+
 ---
 
 ## 7. Implementation Phases
+
+### Phase 0 — Viability Spike (non-TDD, throwaway)
+**Goal:** Validate that `Game_state` can be used standalone before committing to full TDD.
+
+**Do this before writing any tests:**
+1. Instantiate `Game_state()` directly
+2. Set `board_position_on_screen`, `we_play_white`, `sct`
+3. Inject `_GameThreadStub` (empty `played_moves = []`) as `game_state.game_thread`
+4. Call `set_baseline()` with a real Chess.com/Lichess screen open
+5. Call `register_move_if_needed()` in a 5-second loop
+6. Make a move on screen; verify the move string is returned
+
+**Success criteria:** A legal opponent move string is returned. If this fails, we refactor `Game_state` before writing any Phase 4 tests.
+
+This spike is throwaway code — not committed, not tested. Purpose: fail fast on the riskiest assumption before investing in TDD infrastructure.
+
+---
 
 ### Phase 1 — UCI Engine Skeleton
 **Goal:** A working UCI loop that correctly handshakes and parses position/go commands.
@@ -824,3 +866,5 @@ The UCI engine runs single-threaded on stdin. Move execution (Phase 3) and move 
 | Bot detection on chess sites | Humanization delay on clicks (FR3.3) |
 | Test images not representative | Provide 4+ reference screenshots; supplement with synthetic numpy arrays for edge cases |
 | `Internet_game` internals change | `DirectInternetGame` subclass fails loudly on breakage; easy to update |
+| `Game_state.game_thread` coupling | `register_move_if_needed()` accesses `self.game_thread.played_moves`; `game_thread` defaults to `None` causing `AttributeError`. | Inject `_GameThreadStub` (empty `played_moves = []`) in `set_baseline()`. Premove detection is out of scope for UCI bridge — UCI protocol enforces turn order. |
+| `auto_find_chessboard()` hard-exits | Function originally called `sys.exit(0)` on failure, which would silently kill the engine subprocess. | Modified `auto_find_chessboard()` to `return None, None` on failure; `detect_and_save()` checks for `None` and raises `BoardNotFoundError`. |
