@@ -70,6 +70,9 @@ class UCIEngine:
         if self._recalibrate or not calibration.is_fresh():
             position, we_play_white = self._run_guided_calibration()
             self._recalibrate = False
+            if position is None:
+                self._emit("readyok")
+                return
         else:
             position, we_play_white = calibration.load()
         self._position = position

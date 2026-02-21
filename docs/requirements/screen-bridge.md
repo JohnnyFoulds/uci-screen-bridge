@@ -205,6 +205,10 @@ Run with: `make test` (headless) or `make test-full` (all tiers).
 | `detection/classifier.py` → `Classifier` | Oriented Chamfer Matching to identify piece type per square (needed by `Game_state.get_valid_move()`) | Piece classification during move validation |
 | `utils/paths.py` | `model_path()`, `data_path()` | All asset/data file resolution |
 
+> **Note — minor modification required for `calibration/chessboard_detection.py`:** Replace the two bare `print()` calls in `find_chessboard_from_image()` with `logging.getLogger(__name__).warning(...)`. This is the only change to the existing file and is required to keep stdout clean for UCI.
+> - Line 151: `print("Board is not square.")` → `logger.warning("Board is not square.")`
+> - Line 159: `print("Chess board of online game could not be found.")` → `logger.warning("Chess board of online game could not be found.")`
+
 > **Note on template-match:** `calibration/chessboard_detection.py` → `find_chessboard()` (template-match using `white.JPG` / `black.JPG`) is also available but is **opt-in only** — it is only invoked when the UCI option `CalibrationMethod` is explicitly set to `Template`. The `white.JPG` and `black.JPG` assets remain bundled but are not loaded by default.
 
 ### 4.2 Partially Reusable (adapt or wrap)
@@ -249,6 +253,7 @@ The engine must run as a standalone subprocess called by the Chess GUI, communic
   - `option name Recalibrate type button` — triggers re-detection of board on screen (same as re-running `isready` calibration)
   - `option name TTSAlerts type check default true` — enable/disable TTS audio alerts for critical events (board not found, move failed, timeout)
   - `option name PromotionStyle type combo default Auto var Auto var ChessCom var Lichess` — site-specific promotion dialog handling
+  - `option name LogLevel type combo default INFO var DEBUG var INFO var WARNING var OFF` — verbosity of the log file written to `data/uci-bridge.log`. `DEBUG`: every CV scan, click coordinate, and move candidate. `INFO` (default): move executions, calibration events, timeouts. `WARNING`: errors and warnings only. `OFF`: no log file written.
 
 ### FR2: Board Calibration
 The bridge must know where the chess board is on screen before play begins.
@@ -316,6 +321,8 @@ src/uci_screen_bridge/
 │   ├── executor.py         # Player move execution (wraps DirectInternetGame)
 │   └── detector.py         # Opponent move detection (wraps Game_state)
 ├── uci_bridge.py           # Entry point: wire UCI engine + screen components + Speech_thread
+│                           #   Calls _configure_logging(level_name) before UCIEngine.run().
+│                           #   _configure_logging sets up logging.FileHandler → data/uci-bridge.log
 │
 │   [EXISTING — unchanged]
 ├── calibration/
@@ -329,6 +336,27 @@ src/uci_screen_bridge/
 └── utils/
     └── paths.py
 ```
+
+**Startup logging configuration** — called in `uci_bridge.py` before `UCIEngine.run()`:
+
+```python
+# uci_bridge.py
+import logging
+from uci_screen_bridge.utils.paths import data_path
+
+def _configure_logging(level_name: str):
+    level = getattr(logging, level_name, logging.INFO)
+    if level_name == "OFF":
+        return  # no log file written
+    log_file = data_path("uci-bridge.log")
+    logging.basicConfig(
+        filename=str(log_file),
+        level=level,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+```
+
+All internal modules use a module-level logger (`logger = logging.getLogger(__name__)`). `UCIEngine._emit()` is the **only** function allowed to write to stdout. Everything else logs.
 
 ### 6.2 UCIEngine State Machine
 
@@ -456,9 +484,11 @@ class MoveDetector:
 
 ### 6.6 `screen/executor.py` — MoveExecutor
 
-Uses a thin `DirectInternetGame` subclass to bypass the GUI-specific `Internet_game.__init__`:
+Uses a thin `DirectInternetGame` subclass to bypass the GUI-specific `Internet_game.__init__` and override `move()` to replace the inherited `print()` with logging:
 
 ```python
+_log = logging.getLogger(__name__)
+
 class DirectInternetGame(Internet_game):
     """Thin subclass of Internet_game that accepts board position directly,
     bypassing the GUI-dependent __init__ of the parent class."""
@@ -467,6 +497,40 @@ class DirectInternetGame(Internet_game):
         self.position = board_position
         self.we_play_white = we_play_white
         self.drag_drop = drag_drop
+        self.is_our_turn = we_play_white   # set defensively
+
+    def move(self, move):
+        """Execute move on screen. Overrides parent to:
+        - Use logging instead of print()
+        - Handle promotion moves (parent does not)
+        """
+        move_string = move.uci()
+        origin_square = move_string[0:2]
+        destination_square = move_string[2:4]
+        promotion_piece = move_string[4] if len(move_string) > 4 else None
+
+        centerXOrigin, centerYOrigin = self.get_square_center(origin_square)
+        centerXDest, centerYDest = self.get_square_center(destination_square)
+
+        if self.drag_drop:
+            pyautogui.moveTo(centerXOrigin, centerYOrigin, 0.01)
+            pyautogui.dragTo(centerXOrigin, centerYOrigin + 1,
+                             button='left', duration=0.01)
+            pyautogui.dragTo(centerXDest, centerYDest,
+                             button='left', duration=0.3)
+        else:
+            pyautogui.click(centerXOrigin, centerYOrigin, duration=0.1)
+            pyautogui.click(centerXDest, centerYDest, duration=0.1)
+
+        if promotion_piece:
+            self._handle_promotion(promotion_piece, centerXDest, centerYDest)
+
+        _log.debug("Executed move %s -> %s (promo=%s)",
+                   origin_square, destination_square, promotion_piece)
+
+    def _handle_promotion(self, piece, dest_x, dest_y):
+        """Poll for and click the promotion dialog. See FR3.4."""
+        ...  # new code — see FR3.4 spec
 
 class MoveExecutor:
     def __init__(self, board_position, we_play_white, drag_drop):
@@ -745,7 +809,7 @@ Full round-trip tests using pipe to the engine subprocess. All screen interactio
 | `test_uci_isready_sequence` | Sends `uci` then `isready`; receives `uciok` then `readyok` in correct order |
 | `test_ucinewgame_then_position` | After `ucinewgame`, `position startpos moves e2e4` does not crash and executor is called |
 | `test_go_returns_bestmove` | After setup, `go` returns a `bestmove <uci>` line within the configured timeout |
-| `test_no_stdout_pollution` | A full session including `ucinewgame`, `setoption`, `position`, `go` produces no unexpected lines — every non-standard line has `info string` prefix |
+| `test_no_stdout_pollution` | A full session including `ucinewgame`, `setoption`, `position`, `go` produces no unexpected lines — every non-standard line has `info string` prefix. Verified even when `executor.execute()` calls `DirectInternetGame.move()` (which uses `_log.debug()` not `print()`) and when `calibration.detect_and_save()` calls `auto_find_chessboard()` via `find_chessboard_from_image()` (which uses `logger.warning()` not `print()`). `pyautogui` is mocked but the `move()` logging path runs. |
 | `test_executor_called_on_player_move` | Mocked executor's `execute()` is called exactly once when playing white and a white move is issued |
 | `test_setoption_before_isready_accepted` | `setoption` between `uci` and `isready` is accepted without error and applied at `isready` time |
 | `test_position_fen_mid_game` | `position fen <mid-game-fen> moves e4d5` correctly parses a non-starting FEN and registers the move delta |
@@ -813,6 +877,7 @@ End-to-end tests using a local HTML board served via `http.server` and controlle
 | File | Contents | Created by |
 |------|----------|-----------|
 | `data/board_position.bin` | Pickled `(Board_position, we_play_white: bool)` | Phase 2 calibration |
+| `data/uci-bridge.log` | Rotating application log (debug/info/warning messages from all internal modules) | `uci_bridge.py` at startup via `_configure_logging()` |
 
 The existing `data/*.bin` files (constants, ssim, hog, gui, promotion) are not used by the new UCI engine path.
 
@@ -887,3 +952,51 @@ The UCI engine runs single-threaded on stdin. Move execution (Phase 3) and move 
 | `Internet_game` internals change | `DirectInternetGame` subclass fails loudly on breakage; easy to update |
 | `Game_state.game_thread` coupling | `register_move_if_needed()` accesses `self.game_thread.played_moves`; `game_thread` defaults to `None` causing `AttributeError`. | Inject `_GameThreadStub` (empty `played_moves = []`) in `set_baseline()`. Premove detection is out of scope for UCI bridge — UCI protocol enforces turn order. |
 | `auto_find_chessboard()` hard-exits | Function originally called `sys.exit(0)` on failure, which would silently kill the engine subprocess. | Modified `auto_find_chessboard()` to `return None, None` on failure; `detect_and_save()` checks for `None` and raises `BoardNotFoundError`. |
+
+---
+
+## 13. Logging Strategy
+
+### 13.1 Rule
+
+**`UCIEngine._emit()` is the only function allowed to write to stdout.** All internal debug/diagnostic output uses Python's `logging` module (to a file), never `print()`. This ensures stdout is a clean UCI protocol channel.
+
+### 13.2 Configuration
+
+| Aspect | Specification |
+|--------|--------------|
+| **Module** | Python stdlib `logging` — no new dependency |
+| **Handler** | `logging.FileHandler` writing to `data/uci-bridge.log` (append mode) |
+| **Format** | `%(asctime)s %(name)s %(levelname)s %(message)s` |
+| **Setup** | `uci_bridge.py` calls `_configure_logging(level_name)` before `UCIEngine.run()` |
+| **Per-module** | All internal modules use `logger = logging.getLogger(__name__)` |
+
+### 13.3 LogLevel UCI Option
+
+```
+option name LogLevel type combo default INFO var DEBUG var INFO var WARNING var OFF
+```
+
+- `DEBUG` — verbose: every CV scan, every click coordinate, every move candidate
+- `INFO` — default: move executions, calibration events, timeouts
+- `WARNING` — errors and warnings only
+- `OFF` — no log file written (`_configure_logging()` returns early without setting up a handler)
+
+The `LogLevel` option is read from `setoption` and passed to `_configure_logging()` at `isready` time (first call) or immediately if set after startup.
+
+### 13.4 Modules with Required print() → logger Migrations
+
+| Module | Location | Change |
+|--------|----------|--------|
+| `calibration/chessboard_detection.py` | `find_chessboard_from_image()` line 151 | `print("Board is not square.")` → `logger.warning("Board is not square.")` |
+| `calibration/chessboard_detection.py` | `find_chessboard_from_image()` line 159 | `print("Chess board of online game could not be found.")` → `logger.warning("Chess board of online game could not be found.")` |
+| `online/internet_game.py` | `Internet_game.move()` | `print("Done playing move", ...)` → replaced by `_log.debug(...)` in `DirectInternetGame.move()` override (parent `move()` is not called) |
+
+### 13.5 Verification
+
+After implementation:
+```bash
+echo -e "uci\nisready\nposition startpos moves e2e4\ngo\nquit" | uci-screen-bridge-engine
+```
+Every output line must start with `id`, `option`, `uciok`, `readyok`, `info`, or `bestmove`.
+The log file `data/uci-bridge.log` should contain the debug/warning messages instead.
