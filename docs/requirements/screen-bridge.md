@@ -215,7 +215,7 @@ Run with: `make test` (headless) or `make test-full` (all tiers).
 
 | Module | Reusable part | Change needed |
 |--------|--------------|---------------|
-| `online/commentator.py` → `Game_state` | Core CV pipeline: screenshot → square diff → OCM classification → chess legality (opponent move detection) | Needs `game_thread` stub injected (see Section 6.5) |
+| `online/commentator.py` → `Game_state` | Core CV pipeline: screenshot → square diff → OCM classification → chess legality (opponent move detection) | Add `if self.game_thread is not None` guard before the `len(self.game_thread.played_moves)` check (line ~264). This makes `game_thread = None` an explicitly valid UCI-mode state. |
 | `online/commentator.py` → `Commentator_thread` | `Game_state` inner class is the real logic | The thread wrapper needs to be replaced with a call-on-demand pattern driven by UCI `go` commands |
 | `calibration/chessboard_detection.py` → `find_chessboard()` | Board location logic (template variant) | Only invoked when `CalibrationMethod = Template`; save/load board position to/from `data/board_position.bin` |
 | `online/internet_game.py` → `Internet_game` | Maps UCI move string to screen coordinates, executes PyAutoGUI click/drag | Needs a thin `DirectInternetGame` subclass (see Section 6.6) to bypass the GUI-specific `__init__`; mark as "needs thin subclass" |
@@ -277,7 +277,7 @@ The bridge must know where the chess board is on screen before play begins.
 ### FR3: Move Execution (UCI → Screen)
 When the player makes a move, execute it via simulated mouse input.
 
-- **FR3.1 Coordinate mapping:** Reuse `Internet_game.get_square_center(square_name)` which already accounts for board orientation.
+- **FR3.1 Coordinate mapping:** Reuse `Internet_game.get_square_center(square_name)` which already accounts for board orientation. **Note:** Coordinate mapping assumes `Board_position` values are in logical (pyautogui) coordinates. `screen/calibration.py` is responsible for normalising physical-pixel coordinates from `mss` to logical before saving.
 - **FR3.2 Click sequence:** Click source square, then destination square. Support drag-and-drop mode.
 - **FR3.3 Humanization:** Introduce a small random delay (50–200ms) between clicks to avoid bot detection.
 - **FR3.4 Promotion:** If the move includes a promotion piece (e.g., `e7e8q`), after the destination click:
@@ -289,7 +289,17 @@ When the player makes a move, execute it via simulated mouse input.
      - `Lichess`: icons arranged **horizontally** in a row at the top or bottom of the board. Order left→right: Queen(0), Rook(1), Bishop(2), Knight(3). Click position: `destination_center + (icon_index × square_size)` in the horizontal direction.
      - `Auto`: attempt generic detection first; fall back to ChessCom then Lichess patterns.
   5. **File-edge clipping:** After computing the icon click position, clamp the x-coordinate to `[0, screen_width - 1]` and the y-coordinate to `[0, screen_height - 1]` to prevent overflow on edge files (a-file / h-file).
-  6. **Fallback:** If no dialog is detected after all 500ms of polling have elapsed, assume site auto-promotes to queen (common default) and log `info string WARNING: promotion dialog not detected, assuming queen`. Do NOT crash.
+  6. **Fallback:** If no promotion dialog is detected after the full 500ms polling window:
+     1. Emit `info string WARNING: promotion dialog not detected on <square>`
+     2. If `TTSAlerts = true`: speak "Please promote to <piece> on <square>"
+        (piece name is always known from the UCI move string, e.g. `e7e8q` → "queen")
+     3. Poll every 100 ms for up to 10 s, watching for any piece to appear on the destination
+        square (board-state change = user resolved the dialog manually)
+     4. If board-state change detected within 10 s: continue normally
+     5. If 10 s expires without change: emit `info string ERROR: promotion not completed after
+        10s`, proceed with `bestmove <move>` anyway. Do NOT deadlock.
+     Note: when `TTSAlerts = false`, the `info string WARNING` in the Chess GUI's engine log
+     is the only notification; users should ensure TTS is enabled when promoting.
   7. The UCI move string (including the promotion character `q`/`r`/`b`/`n`) must survive to the `bestmove` reply. The `bestmove` line must include the promotion character (e.g., `bestmove e7e8r`, not `bestmove e7e8`).
 - **FR3.5 Move confirmation:** After executing, optionally take a screenshot and verify the source square is now empty (lightweight sanity check).
 
@@ -337,18 +347,20 @@ src/uci_screen_bridge/
     └── paths.py
 ```
 
+**`utils/paths.py` additions:** The existing `model_path()` and `data_path()` helpers are unchanged. A new `uci_data_path(filename)` helper is added that uses `platformdirs.user_data_dir("uci-screen-bridge")` to resolve an OS-compliant user data directory. It creates the directory on first call. All UCI-engine data files (`board_position.bin`, `uci-bridge.log`) use this helper. (`data_path()` is left unchanged — it continues to serve the existing webcam-bridge pickle files.)
+
 **Startup logging configuration** — called in `uci_bridge.py` before `UCIEngine.run()`:
 
 ```python
 # uci_bridge.py
 import logging
-from uci_screen_bridge.utils.paths import data_path
+from uci_screen_bridge.utils.paths import uci_data_path
 
 def _configure_logging(level_name: str):
     level = getattr(logging, level_name, logging.INFO)
     if level_name == "OFF":
         return  # no log file written
-    log_file = data_path("uci-bridge.log")
+    log_file = uci_data_path("uci-bridge.log")
     logging.basicConfig(
         filename=str(log_file),
         level=level,
@@ -455,13 +467,10 @@ class MoveDetector:
         """Call at go time. Captures the current board state as reference.
         After bestmove is returned, call set_baseline() again at the next go
         so the new board position becomes the reference for the next turn."""
-        # Inject a stub game_thread to satisfy Game_state's premove-detection
-        # check in register_move_if_needed(). Premove detection is not needed in
-        # the UCI context — the UCI protocol guarantees turn order. The stub
-        # prevents AttributeError on self.game_thread.played_moves.
-        class _GameThreadStub:
-            played_moves = []
-        self.game_state.game_thread = _GameThreadStub()
+        # Set game_thread = None to mark UCI mode where premove detection is
+        # disabled. commentator.py guards the game_thread.played_moves access
+        # with an `if self.game_thread is not None` check, so no stub is needed.
+        self.game_state.game_thread = None
         self.game_state.previous_chessboard_image = self.game_state.get_chessboard()
         self.game_state.classifier = Classifier(self.game_state)
 
@@ -480,7 +489,7 @@ class MoveDetector:
 
 **Baseline lifecycle:** `set_baseline()` is called once per `go` command, immediately before the scan loop starts. The baseline image (`previous_chessboard_image`) persists through the entire wait. After `bestmove` is returned, `set_baseline()` is called again at the start of the *next* `go` command, ensuring the post-move board state becomes the new reference. `Game_state.register_move()` updates `previous_chessboard_image` internally after each registered move — this is the same mechanism used in the existing webcam game loop.
 
-**`game_thread` stub:** `Game_state.register_move_if_needed()` checks `self.game_thread.played_moves` for premove detection. In the UCI bridge, premove detection is unnecessary (the UCI protocol enforces turn order). A stub object with an empty `played_moves = []` list is injected once in `set_baseline()` to prevent `AttributeError`. This is intentional, not a hack — premove is explicitly out of scope.
+**`game_thread = None`:** `Game_state.register_move_if_needed()` checks `self.game_thread.played_moves` for premove detection. In the UCI bridge, premove detection is unnecessary (the UCI protocol enforces turn order). A `None` value is assigned to `game_state.game_thread` in `set_baseline()`. This is an explicitly valid UCI-mode state — `commentator.py` guards the access with `if self.game_thread is not None` before reading `played_moves`. No stub class is required; premove detection is simply disabled. This is intentional — premove is explicitly out of scope.
 
 ### 6.6 `screen/executor.py` — MoveExecutor
 
@@ -548,7 +557,7 @@ class MoveExecutor:
 ### 6.7 `screen/calibration.py` — BoardCalibration
 
 ```python
-SAVE_FILE = data_path("board_position.bin")
+SAVE_FILE = uci_data_path("board_position.bin")
 
 class BoardNotFoundError(Exception):
     pass
@@ -557,6 +566,7 @@ def detect_and_save(method="auto"):
     """Detects the board on screen and saves position to disk.
 
     Raises BoardNotFoundError if no chess board is detected.
+    Board_position stored on disk is always in logical (pyautogui) coordinates.
     """
     if method == "template":
         position, we_play_white = find_chessboard()
@@ -565,6 +575,11 @@ def detect_and_save(method="auto"):
 
     if position is None:
         raise BoardNotFoundError("No chess board detected on screen")
+
+    # Normalise physical-pixel coordinates from mss to logical (pyautogui) coords.
+    # scale = logical_width / mss_image_pixel_width; divides all Board_position
+    # values so downstream code (get_square_center, executor) uses logical coords.
+    position = _to_logical(position, scale=_compute_hidpi_scale())
 
     with open(SAVE_FILE, 'wb') as f:
         pickle.dump((position, we_play_white), f)
@@ -591,13 +606,26 @@ def load():
 
 **File:** `tests/screen/test_detector.py` (seed file for Phase 4)
 
+#### Phase 0 Prerequisites — Source Modifications
+
+The following source patches must be applied and committed **before** the smoke tests. Unit tests mock the affected code paths, so tests pass even with the bugs present — but Tier 3 and real-world runs break silently without these fixes.
+
+| File | Change | Required before |
+|------|--------|----------------|
+| `online/commentator.py` line ~264 | Add `if self.game_thread is not None` guard before the `len(self.game_thread.played_moves)` check | Phase 0 smoke tests |
+| `calibration/chessboard_detection.py` lines 151, 159 | Replace `print()` with `logger.warning()` | Phase 2 (calibration) |
+
+These are not new phases — they are prerequisite source patches committed as part of setting up the Phase 0 environment.
+
+---
+
 The coupling point is fully understood: `register_move_if_needed()` accesses
 `self.game_thread.played_moves` (lines 264–265 of `commentator.py`) only in the
-premove-detection branch. Injecting `_GameThreadStub(played_moves=[])` is the fix.
+premove-detection branch. The fix is a `None` guard in `commentator.py` (see prerequisites above).
 
 Two committed smoke tests replace exploratory spike code:
 - `test_game_state_instantiates_without_thread` — verifies standalone instantiation
-- `test_game_thread_stub_prevents_attribute_error` — verifies the stub injection works
+- `test_game_thread_none_does_not_raise` — verifies that calling `register_move_if_needed()` with `game_thread = None` does not raise `AttributeError`
 
 **Success criteria:** Both tests pass green with no screen, no browser, no fixtures.
 Run: `pytest tests/screen/test_detector.py -v`
@@ -734,7 +762,7 @@ All tests may call parser functions directly (unit style) or pipe commands to th
 | `test_promotion_queen_lichess` | `execute("e7e8q")` with Lichess style: click lands on leftmost horizontal icon (index 0) |
 | `test_promotion_rook_lichess` | `execute("e7e8r")` with Lichess style: click lands on second icon from left (index 1) |
 | `test_promotion_black_side` | `execute("e2e1q")` (black promotion): dialog region is searched **below** the destination square, not above |
-| `test_promotion_no_dialog_fallback` | Mock returns no dialog pixels for full 500ms: logs `info string WARNING:`, does NOT crash, assumes queen |
+| `test_promotion_no_dialog_fallback` | Mock returns no dialog pixels for full 500ms: emits `info string WARNING: promotion dialog not detected on <square>`, speaks TTS alert (when enabled), polls for board-state change every 100ms, emits `info string ERROR:` after 10s and does NOT deadlock |
 | `test_promotion_delayed_dialog` | Dialog absent at first 50ms poll but present at 300ms poll: detected and clicked correctly (tests polling, not fixed sleep) |
 | `test_promotion_afile_clip` | Promotion on a-file or h-file: computed click x-coordinate is clamped to `[0, screen_width - 1]` |
 
@@ -874,10 +902,10 @@ End-to-end tests using a local HTML board served via `http.server` and controlle
 
 ## 8. Data Files (Runtime)
 
-| File | Contents | Created by |
-|------|----------|-----------|
-| `data/board_position.bin` | Pickled `(Board_position, we_play_white: bool)` | Phase 2 calibration |
-| `data/uci-bridge.log` | Rotating application log (debug/info/warning messages from all internal modules) | `uci_bridge.py` at startup via `_configure_logging()` |
+| File | Contents | Created by | Location |
+|------|----------|-----------|----------|
+| `board_position.bin` | Pickled `(Board_position, we_play_white: bool)` | Phase 2 calibration | `uci_data_path("board_position.bin")` |
+| `uci-bridge.log` | Application log (debug/info/warning messages from all internal modules) | `uci_bridge.py` at startup via `_configure_logging()` | `uci_data_path("uci-bridge.log")` |
 
 The existing `data/*.bin` files (constants, ssim, hog, gui, promotion) are not used by the new UCI engine path.
 
@@ -895,7 +923,7 @@ The existing `data/*.bin` files (constants, ssim, hog, gui, promotion) are not u
 
 ## 10. Dependencies
 
-All needed runtime libraries already exist in `requirements.txt`:
+Existing runtime libraries (already in `requirements.txt`):
 - `python-chess` — board state tracking, legal move validation
 - `opencv-python` — image processing (pixel diff, Canny, Hough, OCM, ONNX inference)
 - `pyautogui` — mouse click simulation
@@ -903,13 +931,14 @@ All needed runtime libraries already exist in `requirements.txt`:
 - `numpy` — pixel array manipulation
 - `scikit-image` — SSIM (used by classifier pipeline)
 
+**New runtime dependency** (add to `requirements.txt`):
+- `platformdirs>=3.0` — OS-compliant user data directory for UCI data files (`uci_data_path()`)
+
 **New test dependencies** (add to `requirements_dev.txt`):
 - `pytest>=8.0` — test runner (`make test`)
 - `pytest-mock>=3.12` — mocking for CV and screen-capture dependencies
 - `Pillow>=10.0` — synthesizing and loading test images in fixtures
 - `playwright>=1.40` — Tier 3 end-to-end tests (headed browser control for local HTML board)
-
-No new runtime dependencies are needed.
 
 ---
 
@@ -946,11 +975,11 @@ The UCI engine runs single-threaded on stdin. Move execution (Phase 3) and move 
 | Animation causes false move detection | Double-confirmation (100ms) already in `Game_state` |
 | Chess GUI sends `go` before player's move is reflected on screen | Executor performs click before returning control to `go` handler |
 | Promotion dialog varies by site | `PromotionStyle` UCI option (`Auto`/`ChessCom`/`Lichess`); queen fallback with `info string WARNING` |
-| HiDPI / Retina display coordinate scaling | PyAutoGUI handles this via screen coordinate space; mss captures at physical resolution. Verify during testing |
+| HiDPI / Retina display coordinate scaling | After `mss.grab()`, compute `scale = logical_width / mss_image_pixel_width` (where `logical_width` is from `pyautogui.size()` and `mss_image_pixel_width` is the actual pixel width of the captured array). Divide all `Board_position` coordinate values by this scale before storing them. This normalises to logical coordinates once at calibration time; all downstream code (`get_square_center`, executor) uses logical coords naturally. Diagnostic: log `pyautogui.size()` vs mss physical dimensions at calibration startup. |
 | Bot detection on chess sites | Humanization delay on clicks (FR3.3) |
 | Test images not representative | Provide 4+ reference screenshots; supplement with synthetic numpy arrays for edge cases |
 | `Internet_game` internals change | `DirectInternetGame` subclass fails loudly on breakage; easy to update |
-| `Game_state.game_thread` coupling | `register_move_if_needed()` accesses `self.game_thread.played_moves`; `game_thread` defaults to `None` causing `AttributeError`. | Inject `_GameThreadStub` (empty `played_moves = []`) in `set_baseline()`. Premove detection is out of scope for UCI bridge — UCI protocol enforces turn order. |
+| `Game_state.game_thread` coupling | `register_move_if_needed()` accesses `self.game_thread.played_moves`; `game_thread` defaults to `None` causing `AttributeError`. | Add `if self.game_thread is not None` guard in `commentator.py` before the premove check. Set `game_state.game_thread = None` in `set_baseline()`. No stub class required. |
 | `auto_find_chessboard()` hard-exits | Function originally called `sys.exit(0)` on failure, which would silently kill the engine subprocess. | Modified `auto_find_chessboard()` to `return None, None` on failure; `detect_and_save()` checks for `None` and raises `BoardNotFoundError`. |
 
 ---
@@ -966,7 +995,7 @@ The UCI engine runs single-threaded on stdin. Move execution (Phase 3) and move 
 | Aspect | Specification |
 |--------|--------------|
 | **Module** | Python stdlib `logging` — no new dependency |
-| **Handler** | `logging.FileHandler` writing to `data/uci-bridge.log` (append mode) |
+| **Handler** | `logging.FileHandler` writing to `uci_data_path("uci-bridge.log")` (append mode) |
 | **Format** | `%(asctime)s %(name)s %(levelname)s %(message)s` |
 | **Setup** | `uci_bridge.py` calls `_configure_logging(level_name)` before `UCIEngine.run()` |
 | **Per-module** | All internal modules use `logger = logging.getLogger(__name__)` |
