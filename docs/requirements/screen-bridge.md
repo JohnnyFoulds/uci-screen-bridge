@@ -258,6 +258,16 @@ The bridge must know where the chess board is on screen before play begins.
 - **FR2.3 Persistence:** Save the detected `Board_position` and `we_play_white` flag to `data/board_position.bin` (pickle). On subsequent `isready`, load from file to avoid re-detection.
 - **FR2.4 Calibration command:** Support `setoption name Recalibrate value true` (UCI button) or a separate CLI (`python -m uci_screen_bridge.calibrate`) to re-run board detection on demand.
 - **FR2.5 Orientation:** The board detection already returns `we_play_white` via `is_white_on_bottom()`. Confirm this matches the side configured via UCI option. Warn (via `info string`) if there is a mismatch.
+- **FR2.6 Guided calibration flow:** When calibration needs to run (no cached `board_position.bin`, stale data >24h, or `Recalibrate` triggered), the engine must guide the user to ensure only the target web board is visible on screen. A Chess GUI (Fritz, BearChess, etc.) also shows an 8×8 chess board — Hough-line detection cannot distinguish between two boards simultaneously. If both are visible, the merged grid lines produce an unpredictable or failed detection result.
+
+  **Guided flow steps (executed inside `_handle_isready()` before emitting `readyok`):**
+  1. Emit `info string CALIBRATING: Please minimize your chess client. Make sure only the web chess board is visible, then wait...`
+  2. If `TTSAlerts = true`: speak "Please minimize your chess client and show the web chess board"
+  3. Poll `auto_find_chessboard()` (or `find_chessboard()` when `CalibrationMethod = Template`) every 2 seconds, for up to 60 seconds total.
+  4. On success: emit `info string CALIBRATING: Chess board detected. You can reopen your chess client now.` + TTS "Board detected, you may reopen your chess client". Save result to `board_position.bin`. Continue `isready` processing normally.
+  5. If 60 seconds elapse with no board detected: emit `info string ERROR: Chess board not found on screen. Please navigate to the chess board and use Recalibrate.` + TTS alert. Emit `readyok` anyway — do not hang or exit. Subsequent `go` commands with a `None` board position will emit `bestmove 0000`.
+
+  **Subsequent starts:** If `board_position.bin` is fresh (< 24h), skip the guided flow entirely. `readyok` is emitted immediately with no user prompts.
 
 ### FR3: Move Execution (UCI → Screen)
 When the player makes a move, execute it via simulated mouse input.
@@ -556,6 +566,14 @@ All tests may call parser functions directly (unit style) or pipe commands to th
 | `test_uci_handshake` | `uci` command output contains `id name UCI Screen Bridge`, `id author`, all 8 UCI options, and `uciok` |
 | `test_isready` | `isready` responds with exactly `readyok` |
 | `test_isready_before_uci` | `isready` received before `uci` still responds with `readyok` |
+| `test_isready_with_cached_calibration_is_immediate` | When `board_position.bin` exists and is fresh (< 24h), `isready` emits `readyok` immediately with no `CALIBRATING:` lines |
+| `test_isready_without_cache_emits_calibrating_prompt` | When no cached file exists, `isready` emits `info string CALIBRATING: Please minimize...` before `readyok` |
+| `test_guided_calibration_emits_success_message` | When `auto_find_chessboard()` returns a valid board on first poll, engine emits the "board detected" message before `readyok` |
+| `test_guided_calibration_retries_on_none` | When `auto_find_chessboard()` returns `None` for the first several polls then succeeds, `readyok` is eventually emitted with success message |
+| `test_guided_calibration_timeout_emits_error` | When all polls time out (60s), `info string ERROR:` is emitted and `readyok` is still sent (engine does not hang) |
+| `test_recalibrate_reruns_guided_flow` | `setoption name Recalibrate value true` triggers the same guided flow as first-run calibration (prompts user, polls, emits success) |
+| `test_tts_called_on_calibration_prompt` | With `TTSAlerts = true`, `Speech_thread` receives the "minimize your client" phrase during guided calibration |
+| `test_tts_not_called_when_disabled` | With `TTSAlerts = false`, no TTS call is made during guided calibration |
 | `test_ucinewgame_resets_board` | After `position startpos moves e2e4`, `ucinewgame` resets the board to the starting position |
 | `test_position_startpos_one_move` | `position startpos moves e2e4` results in board where e4 is occupied by a white pawn |
 | `test_position_startpos_three_moves` | `position startpos moves e2e4 e7e5 g1f3` leaves board with correct FEN (knight on f3, pawns on e4/e5) |
@@ -764,7 +782,7 @@ End-to-end tests using a local HTML board served via `http.server` and controlle
 
 **Items:**
 
-- **Board not found:** If calibration fails on startup, emit `info string ERROR: chess board not found on screen. Please navigate to chess board and restart.` and enter a retry loop (up to 3 attempts, 2s apart). If still failing after 3 attempts, exit with non-zero status.
+- **Board not found:** The guided calibration flow (FR2.6) handles this during `isready`. It polls for up to 60 seconds with user-facing prompts. If the board is still not detected after 60 seconds, the engine emits `info string ERROR: Chess board not found on screen. Please navigate to the chess board and use Recalibrate.` and continues without exiting — `readyok` is emitted so the Chess GUI does not hang. Subsequent `go` commands with a `None` board position emit `bestmove 0000` with an `info string ERROR`. The user resolves this by triggering the `Recalibrate` UCI option.
 - **Move execution failure:** If `executor.execute()` raises (window not found, click fails), retry up to 3 times with 500ms backoff. If still failing after 3 retries, emit `info string ERROR: could not execute move` + TTS alert "Move execution failed, please check the screen" + output `bestmove 0000`.
 - **Board state drift:** If the CV scan detects a move that doesn't match any legal move (e.g., premove, board refresh animation), emit `info string WARNING: illegal move detected, retrying`, reset `previous_chessboard_image` to the current frame, and retry. If drift persists for 3 consecutive scans, emit TTS "Board detection error, please check the window".
 - **Scan timeout (MoveTimeout reached):** Emit `info string WARNING: move timeout after N seconds` + TTS "Move timeout, no opponent move detected" + `bestmove 0000`.
@@ -778,7 +796,7 @@ End-to-end tests using a local HTML board served via `http.server` and controlle
 | Test | Description |
 |------|-------------|
 | `test_timeout_emits_null_bestmove` | `bestmove 0000` is emitted after `MoveTimeout` seconds with no detected move |
-| `test_calibration_failure_emits_error` | When `auto_find_chessboard()` raises, `info string ERROR:` is printed on stdout |
+| `test_calibration_failure_emits_error` | When `auto_find_chessboard()` returns `None` for the full guided-flow timeout, `info string ERROR:` is emitted and `readyok` is still sent |
 | `test_no_legal_moves_drift` | When `get_valid_move()` returns `None` for 3 consecutive scans, TTS is triggered and `previous_chessboard_image` is reset |
 | `test_move_execution_retry` | If executor raises on first two attempts, third attempt succeeds; no `bestmove 0000` emitted |
 | `test_move_execution_all_retries_fail` | If executor raises on all 3 attempts, `bestmove 0000` is emitted and TTS alert fires |
