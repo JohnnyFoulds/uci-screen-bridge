@@ -60,7 +60,36 @@ This project follows strict Test-Driven Development. The rules are:
 - **A phase is not complete until all its tests pass.** Advancing to the next phase with failing tests is not permitted.
 - **No integration before unit tests pass.** Each component is tested in isolation using mocks before it is wired together with other components.
 
-### 3.2 Test Framework & Infrastructure
+### 3.2 Three-Tier Testing Strategy
+
+The project uses three tiers of tests with different trade-offs between speed, isolation, and realism.
+
+#### Tier 1 — Headless unit tests (real-site screenshots, no screen required)
+**Purpose:** Verify the CV pipeline handles real-world board variations from actual chess sites.
+
+- `tests/fixtures/` holds **real screenshots** captured from Chess.com and Lichess (white/black sides, various positions)
+- `mock_mss` fixture replaces `mss.mss()` with these real PNGs so tests run headlessly
+- Tests cover: different board sizes, color schemes, piece shapes, dark/light themes
+- These tests are **irreplaceable** — a custom local board cannot replicate the specific piece art, font rendering, or UI chrome of real chess sites
+- Runs in CI, no screen required
+
+#### Tier 2 — Component mocked integration tests (headless, no screen required)
+**Purpose:** Verify UCI protocol parsing and component wiring without needing a screen.
+
+- All screen interactions mocked (executor and detector both replaced with test doubles)
+- Fast, CI-suitable
+- Tests UCI command parsing, move delta detection, `bestmove` output format
+
+#### Tier 3 — True end-to-end tests (real pixels, local HTML board, requires display)
+**Purpose:** Verify the full UCI bridge pipeline: PyAutoGUI clicks land on a real window, CV reads live pixels, `bestmove` matches the applied move.
+
+- Uses a local HTML board (`tests/fixtures/board.html`) served via `http.server`
+- Browser controlled via `playwright`; board state changed programmatically from Python
+- The CV's OCM classifier **self-calibrates** from the initial board screenshot, so it works with any piece art that has visible edges
+- `auto_find_chessboard()` uses Hough-line detection on the 8×8 grid — works with any regular grid board
+- Mark with `@pytest.mark.integration`; excluded from CI (`make test`); run on dev machine with `make test-full`
+
+### 3.3 Test Framework & Infrastructure
 
 **Framework:** `pytest` — add to `requirements_dev.txt`. Also add `pytest-mock` for mocking.
 
@@ -69,18 +98,30 @@ requirements_dev.txt additions:
   pytest>=8.0
   pytest-mock>=3.12
   Pillow>=10.0          # for synthesizing test images
+  playwright>=1.40      # Tier 3 end-to-end tests
 ```
 
 **Test directory structure** (new top-level `tests/` mirroring `src/uci_screen_bridge/`):
 
 ```text
 tests/
-├── conftest.py                    # shared fixtures (board positions, fake screenshots)
+├── conftest.py                    # shared fixtures (board positions, fake screenshots, local_board)
 ├── fixtures/                      # static test assets (committed as binary files)
+│   ├── board.html                 # Tier 3: self-contained local HTML chess board
 │   ├── chesscom_white.png         # Chess.com board screenshot (playing white)
 │   ├── chesscom_black.png         # Chess.com board screenshot (playing black)
 │   ├── lichess_white.png          # Lichess board screenshot (playing white)
-│   └── lichess_black.png          # Lichess board screenshot (playing black)
+│   ├── lichess_black.png          # Lichess board screenshot (playing black)
+│   ├── chesscom_after_e2e4.png    # Chess.com board after 1.e4
+│   ├── chesscom_after_e2e4_e7e5.png  # Chess.com board after 1.e4 e5
+│   ├── chesscom_capture.png       # Chess.com board mid-capture (e.g. d4xc5)
+│   ├── chesscom_castled.png       # Chess.com board after e1g1 castling
+│   ├── chesscom_promo_dialog.png  # Chess.com board with promotion dialog at e8
+│   ├── lichess_promo_dialog.png   # Lichess board with promotion dialog
+│   ├── no_promo_region.png        # Region with no dialog pixels (for fallback test)
+│   ├── board_before_promo.png     # Board with white pawn on e7
+│   ├── board_after_promo_queen.png  # Board after white promotes to queen on e8
+│   └── board_after_promo_rook.png   # Board after white promotes to rook on e8
 ├── uci/
 │   └── test_engine.py
 ├── screen/
@@ -88,7 +129,8 @@ tests/
 │   ├── test_executor.py
 │   └── test_detector.py
 └── integration/
-    └── test_uci_round_trip.py
+    ├── test_uci_round_trip.py     # Tier 2: mocked round-trip tests
+    └── test_bridge_real_board.py  # Tier 3: real pixels, local board
 ```
 
 **`conftest.py`** provides:
@@ -96,8 +138,9 @@ tests/
 - `fake_board_position` fixture: a `Board_position(minX=100, minY=100, maxX=900, maxY=900)` for unit tests
 - `board_image_before(move)` / `board_image_after(move)` fixtures: synthesized numpy arrays or PNG paths representing known board states
 - `mock_mss` fixture: patches `mss.mss()` to return pre-captured images from `tests/fixtures/`
+- `local_board` fixture (Tier 3 only): starts a local HTTP server, opens `board.html` in a headed browser via playwright at a fixed screen position, returns `board_position` coordinates to tests
 
-### 3.3 CV Mocking Strategy
+### 3.4 CV Mocking Strategy
 
 Screen-capture code (`mss.mss()`) must be replaced with a fixture in all tests so they run headlessly:
 
@@ -117,16 +160,38 @@ def mock_mss(mocker, request):
 
 Provide at minimum four reference screenshots as test assets in `tests/fixtures/` (Chess.com white/black, Lichess white/black). These are committed into the repository as binary test assets.
 
-### 3.4 Running Tests
+**Fixture file specification** — all board screenshots should be full browser window at 1920×1080 or the board region at native display resolution (include browser chrome so Hough-line detection is realistic):
 
-Add a `test` target to the `Makefile`:
+| File | Content | Used by |
+|------|---------|---------|
+| `chesscom_white.png` | Chess.com board, starting position, playing white | Phase 2 Hough detection, Phase 4 baseline |
+| `chesscom_black.png` | Chess.com board, starting position, playing black | Phase 2 orientation detection |
+| `lichess_white.png` | Lichess board, starting position, playing white | Phase 2, Phase 4 |
+| `lichess_black.png` | Lichess board, starting position, playing black | Phase 2 orientation |
+| `chesscom_after_e2e4.png` | Chess.com board after 1.e4 | Phase 4 move detection |
+| `chesscom_after_e2e4_e7e5.png` | Chess.com board after 1.e4 e5 | Phase 4 move detection |
+| `chesscom_capture.png` | Chess.com board mid-capture (e.g., d4xc5) | Phase 4 capture detection |
+| `chesscom_castled.png` | Chess.com board after `e1g1` castling | Phase 4 castling detection |
+| `chesscom_promo_dialog.png` | Chess.com board with promotion dialog visible at e8 | Phase 3 promotion |
+| `lichess_promo_dialog.png` | Lichess board with promotion dialog visible | Phase 3 promotion |
+| `no_promo_region.png` | Region with no dialog pixels | Phase 3 fallback |
+| `board_before_promo.png` | Board with white pawn on e7 | Phase 4 opponent promotion |
+| `board_after_promo_queen.png` | Board after white promotes to queen on e8 | Phase 4 opponent promotion |
+| `board_after_promo_rook.png` | Board after white promotes to rook on e8 | Phase 4 opponent promotion |
+
+### 3.5 Running Tests
+
+Add targets to the `Makefile`:
 
 ```makefile
-test:
+test:           # Tier 1 + Tier 2 — headless, no screen required; suitable for CI
+	pytest tests/ -v -m "not integration"
+
+test-full:      # All tiers including Tier 3 — requires a display and browser
 	pytest tests/ -v
 ```
 
-Run with: `make test`
+Run with: `make test` (headless) or `make test-full` (all tiers).
 
 ---
 
@@ -176,7 +241,7 @@ The engine must run as a standalone subprocess called by the Chess GUI, communic
 - **FR1.4 Go command:** On `go` (any variant: `go`, `go infinite`, `go movetime N`, `go wtime ... btime ...`), enter the CV scan loop to detect the opponent's move on screen. Block until a move is confirmed, then output `bestmove <move>`.
 - **FR1.5 Quit:** On `quit`, release resources and exit cleanly.
 - **FR1.6 UCI options:** Expose configuration as UCI options so the Chess GUI can pass settings without a separate config file. Full option set:
-  - `option name Side type combo default White var White var Black` — which color we play
+  - `option name Side type combo default Auto var Auto var White var Black` — which color we play. `Auto` (the default) uses the `we_play_white` value returned by `auto_find_chessboard()` / `is_white_on_bottom()` at `isready` time; `White` and `Black` override the auto-detected result. If the explicit value conflicts with the detected orientation, emit `info string WARNING: Side option conflicts with detected board orientation`.
   - `option name CalibrationMethod type combo default Auto var Auto var Template` — board detection method (Auto = Hough-line, **default**; Template = template-match using bundled images, opt-in only)
   - `option name ScanInterval type spin default 500 min 100 max 2000` — milliseconds between CV scans
   - `option name DragDrop type check default false` — use drag-and-drop vs. two-click
@@ -201,14 +266,16 @@ When the player makes a move, execute it via simulated mouse input.
 - **FR3.2 Click sequence:** Click source square, then destination square. Support drag-and-drop mode.
 - **FR3.3 Humanization:** Introduce a small random delay (50–200ms) between clicks to avoid bot detection.
 - **FR3.4 Promotion:** If the move includes a promotion piece (e.g., `e7e8q`), after the destination click:
-  1. Sleep 300ms to allow the promotion dialog to appear.
-  2. Capture a screenshot of the region above (or below, depending on orientation) the destination square — approximately 1.5 square heights in size.
-  3. Scan for a promotion dialog: if any pixel column shows a sudden color pattern consistent with a dialog (brighter or darker band), the dialog is present. Click the piece icon corresponding to the promotion character in the UCI move string (queen/rook/bishop/knight).
-  4. **Site-specific behavior** (controlled by `PromotionStyle` UCI option):
-     - `Auto`: attempt generic detection first; fall back to ChessCom then Lichess patterns
-     - `ChessCom`: dialog appears above/below the destination square; 4 piece icons stacked vertically
-     - `Lichess`: dialog appears as 4 icons inline at the top or bottom of the board
-  5. **Fallback:** If no dialog is detected after 500ms, assume site auto-promotes to queen (common default) and log `info string WARNING: promotion dialog not detected, assuming queen`.
+  1. Poll every 50ms (up to 500ms) for the promotion dialog to appear. Proceed as soon as it is detected; do not wait the full 500ms if detected earlier.
+  2. **Dialog direction:** The dialog always appears toward the *near edge* — the edge closest to the promoting player's side. For white promoting on rank 8, the dialog appears above the destination square. For black promoting on rank 1, the dialog appears below the destination square.
+  3. Capture a screenshot of the near-edge region (≈1.5 square heights above or below the destination square). Scan for the promotion dialog using the pattern: a sudden color transition (brighter or darker band) in a pixel column.
+  4. **Icon position lookup table** (controlled by `PromotionStyle` UCI option):
+     - `ChessCom`: icons stacked **vertically** above/below the destination square. Order top→bottom: Queen(0), Knight(1), Rook(2), Bishop(3). Click position: `destination_center + (icon_index × square_size)` in the vertical direction toward the near edge.
+     - `Lichess`: icons arranged **horizontally** in a row at the top or bottom of the board. Order left→right: Queen(0), Rook(1), Bishop(2), Knight(3). Click position: `destination_center + (icon_index × square_size)` in the horizontal direction.
+     - `Auto`: attempt generic detection first; fall back to ChessCom then Lichess patterns.
+  5. **File-edge clipping:** After computing the icon click position, clamp the x-coordinate to `[0, screen_width - 1]` and the y-coordinate to `[0, screen_height - 1]` to prevent overflow on edge files (a-file / h-file).
+  6. **Fallback:** If no dialog is detected after all 500ms of polling have elapsed, assume site auto-promotes to queen (common default) and log `info string WARNING: promotion dialog not detected, assuming queen`. Do NOT crash.
+  7. The UCI move string (including the promotion character `q`/`r`/`b`/`n`) must survive to the `bestmove` reply. The `bestmove` line must include the promotion character (e.g., `bestmove e7e8r`, not `bestmove e7e8`).
 - **FR3.5 Move confirmation:** After executing, optionally take a screenshot and verify the source square is now empty (lightweight sanity check).
 
 ### FR4: Opponent Move Detection (Screen → UCI)
@@ -445,13 +512,28 @@ All tests may call parser functions directly (unit style) or pipe commands to th
 |------|-------------|
 | `test_uci_handshake` | `uci` command output contains `id name UCI Screen Bridge`, `id author`, all 8 UCI options, and `uciok` |
 | `test_isready` | `isready` responds with exactly `readyok` |
+| `test_isready_before_uci` | `isready` received before `uci` still responds with `readyok` |
 | `test_ucinewgame_resets_board` | After `position startpos moves e2e4`, `ucinewgame` resets the board to the starting position |
 | `test_position_startpos_one_move` | `position startpos moves e2e4` results in board where e4 is occupied by a white pawn |
 | `test_position_startpos_three_moves` | `position startpos moves e2e4 e7e5 g1f3` leaves board with correct FEN (knight on f3, pawns on e4/e5) |
+| `test_position_startpos_no_moves` | `position startpos` (no moves list) does not trigger executor and leaves board at starting position |
 | `test_position_fen` | `position fen <fen> moves ...` correctly parses a non-starting FEN and applies subsequent moves |
 | `test_move_delta_player_move` | When player side is white and a white move is added, executor is called exactly once with the new move |
 | `test_move_delta_opponent_move` | When player side is white and a black move is added, executor is NOT called |
 | `test_move_delta_no_new_move` | Sending the same position twice does not trigger the executor |
+| `test_go_before_position_assumes_startpos` | `go` received before any `position` command assumes start position with no moves; does not crash |
+| `test_go_variants_all_trigger_scan` | `go`, `go infinite`, `go movetime 5000`, and `go wtime 60000 btime 60000` all invoke the CV scan loop (mock detector) |
+| `test_stop_interrupts_go` | `stop` command interrupts any blocking `go` and causes `bestmove 0000` to be emitted |
+| `test_unknown_command_ignored` | Unknown commands (e.g., `xboard`, `ping 1`) are silently ignored; no output and no crash |
+| `test_setoption_side_white` | `setoption name Side value White` stores the side and executor uses white orientation |
+| `test_setoption_side_black` | `setoption name Side value Black` stores the side and executor uses black orientation |
+| `test_setoption_side_auto_uses_calibration` | `setoption name Side value Auto` (default) uses `we_play_white` from `auto_find_chessboard()` |
+| `test_setoption_side_explicit_overrides_calibration` | Explicit `Side = White` overrides a detected `we_play_white = False`; emits `info string WARNING:` about mismatch |
+| `test_setoption_scan_interval` | `setoption name ScanInterval value 200` passes 200ms to the detector |
+| `test_setoption_drag_drop` | `setoption name DragDrop value true` passes `drag_drop=True` to the executor |
+| `test_setoption_move_timeout` | `setoption name MoveTimeout value 30` passes 30s to the detector |
+| `test_setoption_calibration_method` | `setoption name CalibrationMethod value Template` passes `method="template"` to calibration |
+| `test_setoption_before_isready` | `setoption` between `uci` and `isready` is accepted and applied at `isready` time |
 | `test_quit_exits` | `quit` causes the process to exit with code 0 |
 
 ---
@@ -479,9 +561,17 @@ All tests may call parser functions directly (unit style) or pipe commands to th
 |------|-------------|
 | `test_detect_and_save_auto` | `detect_and_save(method="auto")` with mocked `auto_find_chessboard()` returning a fixed `Board_position` writes the correct data to a temp file |
 | `test_detect_and_save_template` | `detect_and_save(method="template")` with mocked `find_chessboard()` returning a fixed `Board_position` writes the correct data |
+| `test_detect_and_save_overwrites_existing` | Calling `detect_and_save()` a second time overwrites the existing file with new values atomically |
+| `test_detect_and_save_raises_when_board_not_found` | When `auto_find_chessboard()` returns `None`, `detect_and_save()` raises `BoardNotFoundError` |
 | `test_load_returns_none_when_missing` | `load()` returns `(None, None)` when the save file does not exist |
 | `test_load_round_trip` | After `detect_and_save()`, `load()` returns the same `Board_position` and `we_play_white` values |
 | `test_board_position_values_plausible` | Loaded `Board_position` satisfies `minX < maxX` and `minY < maxY` |
+| `test_orientation_white_on_bottom` | `is_white_on_bottom()` returns `True` for `chesscom_white.png` fixture (bottom edge is lighter — white pieces) |
+| `test_orientation_black_on_bottom` | `is_white_on_bottom()` returns `False` for `chesscom_black.png` fixture |
+| `test_hough_detects_chesscom_board` | `auto_find_chessboard()` with `chesscom_white.png` fixture returns a valid `Board_position` with `minX < maxX` |
+| `test_hough_detects_lichess_board` | `auto_find_chessboard()` with `lichess_white.png` fixture returns a valid `Board_position` with `minX < maxX` |
+
+**Clarification on `isready` vs `load()` staleness:** `load()` always returns data if the file exists (no mtime check). The `isready` handler is responsible for checking whether `board_position.bin` mtime is >24h and discarding stale data by calling `detect_and_save()` again. `load()` itself is a pure file reader.
 
 ---
 
@@ -506,9 +596,24 @@ All tests may call parser functions directly (unit style) or pipe commands to th
 |------|-------------|
 | `test_execute_white_on_bottom` | `execute("e2e4")` with white-on-bottom calls `pyautogui.click` twice with correct pixel coordinates (mock pyautogui) |
 | `test_execute_black_on_bottom` | `execute("e2e4")` with black-on-bottom (board flipped) calls `pyautogui.click` with correctly mirrored coordinates |
+| `test_execute_small_board` | `execute("e2e4")` with `Board_position(minX=0,minY=0,maxX=400,maxY=400)` — coordinates scale correctly to 50px squares |
+| `test_execute_large_board` | `execute("e2e4")` with `Board_position(minX=0,minY=0,maxX=1000,maxY=1000)` — coordinates scale correctly to 125px squares |
 | `test_humanization_delay` | The time elapsed between the two clicks is within the 50–200ms range |
 | `test_drag_drop_mode` | With `drag_drop=True`, calls `pyautogui.moveTo` + `pyautogui.dragTo` instead of two `click` calls |
-| `test_promotion_move` | `execute("e7e8q")` triggers the promotion dialog handler after the destination click |
+| `test_execute_malformed_move_logs_error` | `execute("z9z9")` (invalid UCI) emits `info string ERROR:` and does NOT call `pyautogui.click` |
+| `test_executor_handles_failsafe` | If PyAutoGUI raises `FailSafeException`, the executor catches it and emits `info string WARNING:` |
+| `test_direct_internet_game_has_required_attrs` | `DirectInternetGame.__init__` sets all attributes that `Internet_game.move()` accesses (`position`, `we_play_white`, `drag_drop`, etc.) |
+| `test_promotion_queen_chesscom` | `execute("e7e8q")` with ChessCom style: `pyautogui.click` lands on the queen-icon pixel (top icon in vertical stack, index 0) |
+| `test_promotion_rook_chesscom` | `execute("e7e8r")` with ChessCom style: click lands on rook icon (index 2 in vertical stack) |
+| `test_promotion_knight_chesscom` | `execute("e7e8n")` with ChessCom style: click lands on knight icon (index 1 in vertical stack) |
+| `test_promotion_queen_lichess` | `execute("e7e8q")` with Lichess style: click lands on leftmost horizontal icon (index 0) |
+| `test_promotion_rook_lichess` | `execute("e7e8r")` with Lichess style: click lands on second icon from left (index 1) |
+| `test_promotion_black_side` | `execute("e2e1q")` (black promotion): dialog region is searched **below** the destination square, not above |
+| `test_promotion_no_dialog_fallback` | Mock returns no dialog pixels for full 500ms: logs `info string WARNING:`, does NOT crash, assumes queen |
+| `test_promotion_delayed_dialog` | Dialog absent at first 50ms poll but present at 300ms poll: detected and clicked correctly (tests polling, not fixed sleep) |
+| `test_promotion_afile_clip` | Promotion on a-file or h-file: computed click x-coordinate is clamped to `[0, screen_width - 1]` |
+
+Fixtures for promotion tests: `tests/fixtures/chesscom_promo_dialog.png`, `tests/fixtures/lichess_promo_dialog.png`, `tests/fixtures/no_promo_region.png`.
 
 ---
 
@@ -536,10 +641,19 @@ All tests use the `mock_mss` fixture from `conftest.py` to supply board images f
 |------|-------------|
 | `test_set_baseline_captures_image` | `set_baseline()` sets `game_state.previous_chessboard_image` to a non-None numpy array |
 | `test_set_baseline_creates_classifier` | `set_baseline()` creates a `Classifier` instance on `game_state` |
+| `test_set_baseline_called_twice_resets` | Calling `set_baseline()` twice resets to the *current* board state (does not accumulate) |
 | `test_wait_for_move_detects_move` | Given before/after PNG fixtures for a known position (e.g., e2→e4), `wait_for_move()` returns `"e2e4"` |
+| `test_capture_move_detected` | Before/after PNG fixtures for a capture (e.g., d4xc5): `wait_for_move()` returns `"d4c5"` |
 | `test_double_confirmation_rejects_animation` | A move detected only on the first scan but not on the second (100ms later) is rejected; function continues waiting |
 | `test_castling_detection` | Before/after image pair for king-side castling returns `"e1g1"` |
+| `test_opponent_promotion_queen` | Before/after PNG pair where opponent promotes e7→e8 to queen: `wait_for_move()` returns `"e7e8q"` (not `"e7e8"`) |
+| `test_opponent_promotion_rook` | Before/after PNG pair where opponent promotes e7→e8 to rook: `wait_for_move()` returns `"e7e8r"` |
+| `test_scan_interval_is_respected` | The polling loop sleeps `scan_interval` seconds between scans (mock `time.sleep`, verify it's called with the correct value) |
+| `test_wait_for_move_game_over_returns_null` | If `board.is_game_over()` is True, `wait_for_move()` returns `"0000"` immediately |
+| `test_screen_capture_failure_retried` | If `sct.grab()` raises (e.g., window gone), the detector catches the exception and retries on the next poll cycle |
 | `test_timeout_returns_null_move` | With `move_timeout_s=0.1` and a static board image (no move), returns `"0000"` within 1 second |
+
+Fixtures for promotion tests: `tests/fixtures/board_before_promo.png`, `tests/fixtures/board_after_promo_queen.png`, `tests/fixtures/board_after_promo_rook.png`.
 
 ---
 
@@ -561,7 +675,7 @@ All tests use the `mock_mss` fixture from `conftest.py` to supply board images f
 - Works end-to-end with Chess.com in a browser
 - No stdout pollution from debug prints (guard all debug output with `info string` prefix)
 
-#### Phase 5 Test Suite (`tests/integration/test_uci_round_trip.py`)
+#### Phase 5 Test Suite — Tier 2 (`tests/integration/test_uci_round_trip.py`)
 
 Full round-trip tests using pipe to the engine subprocess. All screen interactions are mocked via fixture injection.
 
@@ -570,8 +684,32 @@ Full round-trip tests using pipe to the engine subprocess. All screen interactio
 | `test_uci_isready_sequence` | Sends `uci` then `isready`; receives `uciok` then `readyok` in correct order |
 | `test_ucinewgame_then_position` | After `ucinewgame`, `position startpos moves e2e4` does not crash and executor is called |
 | `test_go_returns_bestmove` | After setup, `go` returns a `bestmove <uci>` line within the configured timeout |
-| `test_no_stdout_pollution` | All non-`bestmove` / non-`info` / non-`readyok` / non-`uciok` output is absent from stdout during a full round-trip |
+| `test_no_stdout_pollution` | A full session including `ucinewgame`, `setoption`, `position`, `go` produces no unexpected lines — every non-standard line has `info string` prefix |
 | `test_executor_called_on_player_move` | Mocked executor's `execute()` is called exactly once when playing white and a white move is issued |
+| `test_setoption_before_isready_accepted` | `setoption` between `uci` and `isready` is accepted without error and applied at `isready` time |
+| `test_position_fen_mid_game` | `position fen <mid-game-fen> moves e4d5` correctly parses a non-starting FEN and registers the move delta |
+| `test_side_orientation_mismatch_warning` | If `Side = White` but calibration returns `we_play_white = False`, `info string WARNING:` is emitted |
+
+#### Phase 5 Test Suite — Tier 3 (`tests/integration/test_bridge_real_board.py`)
+
+End-to-end tests using a local HTML board served via `http.server` and controlled via playwright. Marked `@pytest.mark.integration` — excluded from `make test`, included in `make test-full`.
+
+**Test flow:**
+1. `local_board` fixture starts local HTTP server, opens `board.html` in a headed browser at fixed screen position, returns `(page, board_position)` to tests.
+2. Spawn UCI engine subprocess.
+3. Send `uci` / `isready` → engine auto-detects board via Hough-line from live screen pixels.
+4. Send `position startpos moves e2e4` → engine clicks source (e2) + destination (e4) on browser board.
+5. Verify: `page.evaluate("window.testBoard.getCurrentFen()")` matches expected FEN.
+6. Apply opponent move via JS: `page.evaluate("window.testBoard.applyMove('e7e5')")`.
+7. Send `go` → CV scan detects e7e5 from live screen pixels → returns `bestmove e7e5`.
+8. Assert response equals `bestmove e7e5`.
+
+| Test | Description |
+|------|-------------|
+| `test_engine_detects_board_on_isready` | Engine correctly identifies the local HTML board's position via Hough-line detection |
+| `test_player_move_clicks_board` | `position startpos moves e2e4` causes PyAutoGUI to click on the correct squares; FEN changes match expected post-move position |
+| `test_opponent_move_via_cv` | Applying `e7e5` via JS and sending `go` causes CV to detect and return `bestmove e7e5` |
+| `test_castling_round_trip` | Full round-trip for `e1g1` castling (both the click and the CV detection of the rook move) |
 
 ---
 
@@ -598,9 +736,14 @@ Full round-trip tests using pipe to the engine subprocess. All screen interactio
 |------|-------------|
 | `test_timeout_emits_null_bestmove` | `bestmove 0000` is emitted after `MoveTimeout` seconds with no detected move |
 | `test_calibration_failure_emits_error` | When `auto_find_chessboard()` raises, `info string ERROR:` is printed on stdout |
-| `test_no_legal_moves_drift` | When board image shows no legal moves for 3 consecutive scans, TTS is triggered and scan resets |
+| `test_no_legal_moves_drift` | When `get_valid_move()` returns `None` for 3 consecutive scans, TTS is triggered and `previous_chessboard_image` is reset |
 | `test_move_execution_retry` | If executor raises on first two attempts, third attempt succeeds; no `bestmove 0000` emitted |
+| `test_move_execution_all_retries_fail` | If executor raises on all 3 attempts, `bestmove 0000` is emitted and TTS alert fires |
 | `test_stale_calibration_triggers_redetect` | If `board_position.bin` mtime is >24h old, `isready` discards the file and re-runs detection |
+| `test_tts_disabled_when_option_false` | With `TTSAlerts = false`, no call is made to `Speech_thread` even when an alert condition is triggered |
+| `test_game_over_info_string_content` | When `board.is_game_over()` is True, emits `info string INFO: game over — <result>` (e.g., `info string INFO: game over — White wins by checkmate`) |
+
+**Hardening spec clarification:** The "CV confidence drops below threshold" condition is defined as: `get_valid_move()` returns `None` (no legal move found) for 3 consecutive scan intervals. Remove all references to vague "confidence threshold" language; use this concrete definition instead.
 
 ---
 
@@ -638,6 +781,7 @@ All needed runtime libraries already exist in `requirements.txt`:
 - `pytest>=8.0` — test runner (`make test`)
 - `pytest-mock>=3.12` — mocking for CV and screen-capture dependencies
 - `Pillow>=10.0` — synthesizing and loading test images in fixtures
+- `playwright>=1.40` — Tier 3 end-to-end tests (headed browser control for local HTML board)
 
 No new runtime dependencies are needed.
 

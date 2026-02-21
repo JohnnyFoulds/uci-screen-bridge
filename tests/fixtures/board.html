@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>UCI Screen Bridge Test Board</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #646464;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    #board-container {
+      position: relative;
+    }
+    #board {
+      display: grid;
+      grid-template-columns: repeat(8, 100px);
+      grid-template-rows: repeat(8, 100px);
+      border: 4px solid #1a1a1a;
+      width: 800px;
+      height: 800px;
+    }
+    .square {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+    }
+    .light { background-color: #f0d9b5; }
+    .dark  { background-color: #b58863; }
+    .piece {
+      font-size: 68px;
+      line-height: 1;
+      user-select: none;
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.6);
+    }
+    /* rank/file labels */
+    #labels {
+      position: absolute;
+      top: 4px; left: 4px;
+      width: 800px; height: 800px;
+      pointer-events: none;
+    }
+    .rank-label {
+      position: absolute;
+      left: 2px;
+      font-family: monospace;
+      font-size: 12px;
+      color: rgba(0,0,0,0.5);
+      line-height: 100px;
+    }
+    .file-label {
+      position: absolute;
+      bottom: 2px;
+      font-family: monospace;
+      font-size: 12px;
+      color: rgba(0,0,0,0.5);
+      width: 100px;
+      text-align: right;
+      padding-right: 3px;
+    }
+  </style>
+</head>
+<body>
+<div id="board-container">
+  <div id="board"></div>
+</div>
+
+<script>
+// ── Chess board state and rendering ─────────────────────────────────────────
+
+var PIECE_UNICODE = {
+  'K': '\u2654', 'Q': '\u2655', 'R': '\u2656', 'B': '\u2657', 'N': '\u2658', 'P': '\u2659',
+  'k': '\u265A', 'q': '\u265B', 'r': '\u265C', 'b': '\u265D', 'n': '\u265E', 'p': '\u265F'
+};
+
+var START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+// Board state: board[rank][file], rank 0 = rank 8 (top), file 0 = a-file
+var _board = [];
+var _turn = 'w';
+var _castling = 'KQkq';
+var _enPassant = '-';
+var _halfMove = 0;
+var _fullMove = 1;
+
+function _fileToIdx(f) { return f.charCodeAt(0) - 97; }  // 'a'->0 .. 'h'->7
+function _rankToIdx(r) { return 8 - parseInt(r, 10); }   // '8'->0 .. '1'->7
+function _squareToRC(sq) {
+  return [_rankToIdx(sq[1]), _fileToIdx(sq[0])];
+}
+function _rcToSquare(r, c) {
+  return String.fromCharCode(97 + c) + String(8 - r);
+}
+
+function _parseFEN(fen) {
+  var parts = fen.trim().split(/\s+/);
+  var ranks = parts[0].split('/');
+  _board = [];
+  for (var r = 0; r < 8; r++) {
+    _board.push([null, null, null, null, null, null, null, null]);
+    var c = 0;
+    for (var i = 0; i < ranks[r].length; i++) {
+      var ch = ranks[r][i];
+      if (ch >= '1' && ch <= '8') {
+        c += parseInt(ch, 10);
+      } else {
+        _board[r][c] = ch;
+        c++;
+      }
+    }
+  }
+  _turn      = parts[1] || 'w';
+  _castling  = parts[2] || '-';
+  _enPassant = parts[3] || '-';
+  _halfMove  = parseInt(parts[4] || '0', 10);
+  _fullMove  = parseInt(parts[5] || '1', 10);
+}
+
+function _generateFEN() {
+  var fen = '';
+  for (var r = 0; r < 8; r++) {
+    if (r > 0) fen += '/';
+    var empty = 0;
+    for (var c = 0; c < 8; c++) {
+      if (_board[r][c]) {
+        if (empty > 0) { fen += empty; empty = 0; }
+        fen += _board[r][c];
+      } else {
+        empty++;
+      }
+    }
+    if (empty > 0) fen += empty;
+  }
+  fen += ' ' + _turn;
+  fen += ' ' + (_castling || '-');
+  fen += ' ' + (_enPassant || '-');
+  fen += ' ' + _halfMove;
+  fen += ' ' + _fullMove;
+  return fen;
+}
+
+function _applyMove(uci) {
+  var fromSq = uci.substring(0, 2);
+  var toSq   = uci.substring(2, 4);
+  var promo  = uci.length > 4 ? uci[4] : null;
+
+  var fr = _squareToRC(fromSq)[0];
+  var fc = _squareToRC(fromSq)[1];
+  var tr = _squareToRC(toSq)[0];
+  var tc = _squareToRC(toSq)[1];
+
+  var piece = _board[fr][fc];
+  if (!piece) return false;
+
+  // ── Castling: move the rook ───────────────────────────────────────────────
+  if (piece === 'K' && fromSq === 'e1') {
+    if (toSq === 'g1') { _board[7][5] = 'R'; _board[7][7] = null; }
+    if (toSq === 'c1') { _board[7][3] = 'R'; _board[7][0] = null; }
+  }
+  if (piece === 'k' && fromSq === 'e8') {
+    if (toSq === 'g8') { _board[0][5] = 'r'; _board[0][7] = null; }
+    if (toSq === 'c8') { _board[0][3] = 'r'; _board[0][0] = null; }
+  }
+
+  // ── En passant: remove captured pawn ─────────────────────────────────────
+  if ((piece === 'P' || piece === 'p') && _enPassant !== '-' && toSq === _enPassant) {
+    var epRank = fr;  // captured pawn on same rank as moving pawn before en-passant capture
+    _board[epRank][tc] = null;
+  }
+
+  // ── Update en passant target ──────────────────────────────────────────────
+  if (piece === 'P' && fr === 6 && tr === 4) {
+    _enPassant = _rcToSquare(5, fc);
+  } else if (piece === 'p' && fr === 1 && tr === 3) {
+    _enPassant = _rcToSquare(2, fc);
+  } else {
+    _enPassant = '-';
+  }
+
+  // ── Place piece ───────────────────────────────────────────────────────────
+  var placed = piece;
+  if (promo) {
+    placed = (_turn === 'w') ? promo.toUpperCase() : promo.toLowerCase();
+  }
+  _board[tr][tc] = placed;
+  _board[fr][fc] = null;
+
+  // ── Update castling rights ────────────────────────────────────────────────
+  if (piece === 'K') { _castling = _castling.replace('K', '').replace('Q', ''); }
+  if (piece === 'k') { _castling = _castling.replace('k', '').replace('q', ''); }
+  if (fromSq === 'a1' || toSq === 'a1') { _castling = _castling.replace('Q', ''); }
+  if (fromSq === 'h1' || toSq === 'h1') { _castling = _castling.replace('K', ''); }
+  if (fromSq === 'a8' || toSq === 'a8') { _castling = _castling.replace('q', ''); }
+  if (fromSq === 'h8' || toSq === 'h8') { _castling = _castling.replace('k', ''); }
+  if (_castling === '') { _castling = '-'; }
+
+  // ── Update move counters and turn ─────────────────────────────────────────
+  if (piece === 'P' || piece === 'p' || _board[tr][tc] !== placed) {
+    _halfMove = 0;  // reset on pawn move or capture
+  } else {
+    _halfMove++;
+  }
+  if (_turn === 'b') { _fullMove++; }
+  _turn = (_turn === 'w') ? 'b' : 'w';
+
+  _renderBoard();
+  return true;
+}
+
+function _renderBoard() {
+  var boardEl = document.getElementById('board');
+  boardEl.innerHTML = '';
+
+  for (var r = 0; r < 8; r++) {
+    for (var c = 0; c < 8; c++) {
+      var sq = document.createElement('div');
+      var isLight = (r + c) % 2 === 0;
+      sq.className = 'square ' + (isLight ? 'light' : 'dark');
+      sq.setAttribute('data-square', _rcToSquare(r, c));
+
+      var p = _board[r][c];
+      if (p && PIECE_UNICODE[p]) {
+        var pieceEl = document.createElement('span');
+        pieceEl.className = 'piece';
+        pieceEl.textContent = PIECE_UNICODE[p];
+        sq.appendChild(pieceEl);
+      }
+      boardEl.appendChild(sq);
+    }
+  }
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+window.testBoard = {
+  /**
+   * Apply a UCI move string (e.g. "e2e4", "e7e8q").
+   * Returns true on success, false if the source square is empty.
+   */
+  applyMove: function(uciMove) {
+    return _applyMove(uciMove);
+  },
+
+  /**
+   * Set board to a specific FEN string.
+   */
+  setPosition: function(fen) {
+    _parseFEN(fen);
+    _renderBoard();
+  },
+
+  /**
+   * Return the current board state as a FEN string.
+   */
+  getCurrentFen: function() {
+    return _generateFEN();
+  }
+};
+
+// ── Initialise ───────────────────────────────────────────────────────────────
+_parseFEN(START_FEN);
+_renderBoard();
+</script>
+</body>
+</html>
