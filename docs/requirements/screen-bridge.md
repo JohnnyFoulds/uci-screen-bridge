@@ -50,40 +50,122 @@ The current repo is a webcam-to-online-game bridge (physical board → webcam �
 
 ---
 
-## 3. Existing Code Inventory & Reuse Plan
+## 3. Development Philosophy & TDD Contract
 
-### 3.1 Directly Reusable (no modification)
+### 3.1 TDD Contract
+
+This project follows strict Test-Driven Development. The rules are:
+
+- **Tests are written before implementation.** For each phase, the test suite (defined below in Section 7) must be written and committed before any implementation code for that phase.
+- **A phase is not complete until all its tests pass.** Advancing to the next phase with failing tests is not permitted.
+- **No integration before unit tests pass.** Each component is tested in isolation using mocks before it is wired together with other components.
+
+### 3.2 Test Framework & Infrastructure
+
+**Framework:** `pytest` — add to `requirements_dev.txt`. Also add `pytest-mock` for mocking.
+
+```text
+requirements_dev.txt additions:
+  pytest>=8.0
+  pytest-mock>=3.12
+  Pillow>=10.0          # for synthesizing test images
+```
+
+**Test directory structure** (new top-level `tests/` mirroring `src/uci_screen_bridge/`):
+
+```text
+tests/
+├── conftest.py                    # shared fixtures (board positions, fake screenshots)
+├── fixtures/                      # static test assets (committed as binary files)
+│   ├── chesscom_white.png         # Chess.com board screenshot (playing white)
+│   ├── chesscom_black.png         # Chess.com board screenshot (playing black)
+│   ├── lichess_white.png          # Lichess board screenshot (playing white)
+│   └── lichess_black.png          # Lichess board screenshot (playing black)
+├── uci/
+│   └── test_engine.py
+├── screen/
+│   ├── test_calibration.py
+│   ├── test_executor.py
+│   └── test_detector.py
+└── integration/
+    └── test_uci_round_trip.py
+```
+
+**`conftest.py`** provides:
+
+- `fake_board_position` fixture: a `Board_position(minX=100, minY=100, maxX=900, maxY=900)` for unit tests
+- `board_image_before(move)` / `board_image_after(move)` fixtures: synthesized numpy arrays or PNG paths representing known board states
+- `mock_mss` fixture: patches `mss.mss()` to return pre-captured images from `tests/fixtures/`
+
+### 3.3 CV Mocking Strategy
+
+Screen-capture code (`mss.mss()`) must be replaced with a fixture in all tests so they run headlessly:
+
+```python
+# conftest.py
+@pytest.fixture
+def mock_mss(mocker, request):
+    """Return a fake mss context manager that yields fixture images."""
+    fixture_name = getattr(request, "param", "chesscom_white.png")
+    img = PIL.Image.open(Path("tests/fixtures") / fixture_name)
+    fake_shot = {"top": 0, "left": 0, "width": img.width, "height": img.height,
+                 "raw": np.array(img)}
+    mock = mocker.patch("mss.mss")
+    mock.return_value.__enter__.return_value.grab.return_value = fake_shot
+    return mock
+```
+
+Provide at minimum four reference screenshots as test assets in `tests/fixtures/` (Chess.com white/black, Lichess white/black). These are committed into the repository as binary test assets.
+
+### 3.4 Running Tests
+
+Add a `test` target to the `Makefile`:
+
+```makefile
+test:
+	pytest tests/ -v
+```
+
+Run with: `make test`
+
+---
+
+## 4. Existing Code Inventory & Reuse Plan
+
+### 4.1 Directly Reusable (no modification)
 
 | Module | What it does | Used for |
 |--------|-------------|----------|
-| `online/internet_game.py` → `Internet_game` | Maps UCI move string to screen coordinates, executes PyAutoGUI click/drag | Player move execution |
-| `calibration/chessboard_detection.py` | Template-match or Hough-line board detection; returns `Board_position(minX,minY,maxX,maxY)` and `we_play_white` | Board location at startup |
+| `calibration/chessboard_detection.py` → `auto_find_chessboard()` | Hough-line board detection; returns `Board_position(minX,minY,maxX,maxY)` and `we_play_white` | Default board location at startup |
 | `online/commentator.py` → `Game_state` | Captures board region via mss, diffs square images, validates moves against `python-chess` legality, handles castling/promotion/premove | Opponent move detection |
 | `detection/classifier.py` → `Classifier` | Oriented Chamfer Matching to identify piece type per square (needed by `Game_state.get_valid_move()`) | Piece classification during move validation |
 | `utils/paths.py` | `model_path()`, `data_path()` | All asset/data file resolution |
 
-### 3.2 Partially Reusable (adapt or wrap)
+> **Note on template-match:** `calibration/chessboard_detection.py` → `find_chessboard()` (template-match using `white.JPG` / `black.JPG`) is also available but is **opt-in only** — it is only invoked when the UCI option `CalibrationMethod` is explicitly set to `Template`. The `white.JPG` and `black.JPG` assets remain bundled but are not loaded by default.
+
+### 4.2 Partially Reusable (adapt or wrap)
 
 | Module | Reusable part | Change needed |
 |--------|--------------|---------------|
 | `online/commentator.py` → `Commentator_thread` | `Game_state` inner class is the real logic | The thread wrapper needs to be replaced with a call-on-demand pattern driven by UCI `go` commands |
-| `calibration/chessboard_detection.py` → `find_chessboard()` / `auto_find_chessboard()` | Board location logic | Save/load board position to/from `data/board_position.bin` for persistence across engine invocations |
+| `calibration/chessboard_detection.py` → `find_chessboard()` | Board location logic (template variant) | Only invoked when `CalibrationMethod = Template`; save/load board position to/from `data/board_position.bin` |
+| `online/internet_game.py` → `Internet_game` | Maps UCI move string to screen coordinates, executes PyAutoGUI click/drag | Needs a thin `DirectInternetGame` subclass (see Section 6.6) to bypass the GUI-specific `__init__`; mark as "needs thin subclass" |
+| `utils/speech.py` → `Speech_thread` | TTS dispatch (macOS `say` / pyttsx3 elsewhere), daemon thread with queue | Reuse for **out-of-band audio alerts only** — not for move commentary. Wrap with `TTSAlerts` UCI option guard. |
+| `utils/languages.py` | English `Language` class | Keep English only; use only the minimal alert phrase set (not full game commentary) |
 
-### 3.3 Not Needed (webcam/physical-board specific)
+### 4.3 Not Needed (webcam/physical-board specific)
 
 - `calibration/board_calibration.py` — physical corner detection
 - `calibration/board_calibration_machine_learning.py` — YOLO corner detection on webcam
 - `detection/board_basics.py` — perspective transform, SSIM, physical board geometry
 - `utils/videocapture.py` — webcam thread
-- `utils/speech.py` — TTS output
-- `utils/languages.py` — TTS language support
 - `main.py` (current) — webcam game loop
 - `gui.py` — Tkinter GUI
 - `diagnostic.py` — webcam overlay
 
 ---
 
-## 4. Functional Requirements
+## 5. Functional Requirements
 
 ### FR1: UCI Protocol Compliance
 The engine must run as a standalone subprocess called by the Chess GUI, communicating via stdin/stdout.
@@ -93,19 +175,23 @@ The engine must run as a standalone subprocess called by the Chess GUI, communic
 - **FR1.3 Move delta detection:** After each `position` command, compare the new moves list to the previous. If a new move appeared AND it is the player's move (i.e., the side we play), execute it on screen immediately.
 - **FR1.4 Go command:** On `go` (any variant: `go`, `go infinite`, `go movetime N`, `go wtime ... btime ...`), enter the CV scan loop to detect the opponent's move on screen. Block until a move is confirmed, then output `bestmove <move>`.
 - **FR1.5 Quit:** On `quit`, release resources and exit cleanly.
-- **FR1.6 UCI options:** Expose configuration as UCI options so the Chess GUI can pass settings without a separate config file. Minimum set:
+- **FR1.6 UCI options:** Expose configuration as UCI options so the Chess GUI can pass settings without a separate config file. Full option set:
   - `option name Side type combo default White var White var Black` — which color we play
-  - `option name CalibrationMethod type combo default Auto var Auto var Template` — board detection method
+  - `option name CalibrationMethod type combo default Auto var Auto var Template` — board detection method (Auto = Hough-line, **default**; Template = template-match using bundled images, opt-in only)
   - `option name ScanInterval type spin default 500 min 100 max 2000` — milliseconds between CV scans
   - `option name DragDrop type check default false` — use drag-and-drop vs. two-click
+  - `option name MoveTimeout type spin default 60 min 10 max 300` — seconds to wait for opponent move before emitting `bestmove 0000`
+  - `option name Recalibrate type button` — triggers re-detection of board on screen (same as re-running `isready` calibration)
+  - `option name TTSAlerts type check default true` — enable/disable TTS audio alerts for critical events (board not found, move failed, timeout)
+  - `option name PromotionStyle type combo default Auto var Auto var ChessCom var Lichess` — site-specific promotion dialog handling
 
 ### FR2: Board Calibration
 The bridge must know where the chess board is on screen before play begins.
 
-- **FR2.1 Auto-detect:** Use Hough-line detection (`auto_find_chessboard()`) to automatically locate the board from a screenshot. This is the default and requires no user action.
-- **FR2.2 Template-match:** Use existing `white.JPG` / `black.JPG` templates via `find_chessboard()` as a fallback.
+- **FR2.1 Auto-detect (default):** Use Hough-line detection (`auto_find_chessboard()`) to automatically locate the board from a screenshot. This is the **primary and default** method. It requires no user action and no user-provided template files.
+- **FR2.2 Template-match (opt-in):** Use existing `white.JPG` / `black.JPG` templates via `find_chessboard()` as an **opt-in alternative**, activated only when `CalibrationMethod = Template` is explicitly set. This is not a fallback — it is a user-selected mode. Remove any language implying it is a "fallback".
 - **FR2.3 Persistence:** Save the detected `Board_position` and `we_play_white` flag to `data/board_position.bin` (pickle). On subsequent `isready`, load from file to avoid re-detection.
-- **FR2.4 Calibration command:** Support a custom UCI command `setoption name Recalibrate value true` or a separate CLI (`python -m uci_screen_bridge.calibrate`) to re-run board detection.
+- **FR2.4 Calibration command:** Support `setoption name Recalibrate value true` (UCI button) or a separate CLI (`python -m uci_screen_bridge.calibrate`) to re-run board detection on demand.
 - **FR2.5 Orientation:** The board detection already returns `we_play_white` via `is_white_on_bottom()`. Confirm this matches the side configured via UCI option. Warn (via `info string`) if there is a mismatch.
 
 ### FR3: Move Execution (UCI → Screen)
@@ -114,13 +200,21 @@ When the player makes a move, execute it via simulated mouse input.
 - **FR3.1 Coordinate mapping:** Reuse `Internet_game.get_square_center(square_name)` which already accounts for board orientation.
 - **FR3.2 Click sequence:** Click source square, then destination square. Support drag-and-drop mode.
 - **FR3.3 Humanization:** Introduce a small random delay (50–200ms) between clicks to avoid bot detection.
-- **FR3.4 Promotion:** If the move includes a promotion piece (e.g., `e7e8q`), after the destination click, detect and click the promotion dialog. Strategy: after clicking the destination, take a screenshot and look for the promotion piece picker in the expected screen region.
+- **FR3.4 Promotion:** If the move includes a promotion piece (e.g., `e7e8q`), after the destination click:
+  1. Sleep 300ms to allow the promotion dialog to appear.
+  2. Capture a screenshot of the region above (or below, depending on orientation) the destination square — approximately 1.5 square heights in size.
+  3. Scan for a promotion dialog: if any pixel column shows a sudden color pattern consistent with a dialog (brighter or darker band), the dialog is present. Click the piece icon corresponding to the promotion character in the UCI move string (queen/rook/bishop/knight).
+  4. **Site-specific behavior** (controlled by `PromotionStyle` UCI option):
+     - `Auto`: attempt generic detection first; fall back to ChessCom then Lichess patterns
+     - `ChessCom`: dialog appears above/below the destination square; 4 piece icons stacked vertically
+     - `Lichess`: dialog appears as 4 icons inline at the top or bottom of the board
+  5. **Fallback:** If no dialog is detected after 500ms, assume site auto-promotes to queen (common default) and log `info string WARNING: promotion dialog not detected, assuming queen`.
 - **FR3.5 Move confirmation:** After executing, optionally take a screenshot and verify the source square is now empty (lightweight sanity check).
 
 ### FR4: Opponent Move Detection (Screen → UCI)
 When `go` is received, scan the screen for the opponent's move and return it as `bestmove`.
 
-- **FR4.1 Baseline capture:** At the time `go` is received, capture the current board image as the baseline (equivalent to `previous_chessboard_image` in `Game_state`).
+- **FR4.1 Baseline capture:** At the time `go` is received, call `MoveDetector.set_baseline()` to capture the current board image as the reference state. This image becomes `game_state.previous_chessboard_image`. After `bestmove` is returned, `set_baseline()` is called again at the start of the *next* `go` command — the post-move board state becomes the new baseline for the next turn.
 - **FR4.2 Scan loop:** Poll at `ScanInterval` ms. Capture current board image and compute per-square pixel diffs using `Game_state.get_potential_moves()`.
 - **FR4.3 Move validation:** Use `Game_state.get_valid_move()` which validates candidates against `python-chess` legal moves and the OCM classifier.
 - **FR4.4 Animation debounce:** Reuse the existing double-confirmation logic from `Game_state.register_move_if_needed()`: if a candidate move is detected, wait 100ms and re-check — only accept if the same move is still seen (avoids animation artifacts).
@@ -130,9 +224,9 @@ When `go` is received, scan the screen for the opponent's move and return it as 
 
 ---
 
-## 5. Technical Architecture
+## 6. Technical Architecture
 
-### 5.1 New Module Structure
+### 6.1 New Module Structure
 
 ```text
 src/uci_screen_bridge/
@@ -142,9 +236,9 @@ src/uci_screen_bridge/
 ├── screen/
 │   ├── __init__.py
 │   ├── calibration.py      # Board detection + persistence (wraps chessboard_detection.py)
-│   ├── executor.py         # Player move execution (wraps Internet_game)
+│   ├── executor.py         # Player move execution (wraps DirectInternetGame)
 │   └── detector.py         # Opponent move detection (wraps Game_state)
-├── uci_bridge.py           # Entry point: wire UCI engine + screen components
+├── uci_bridge.py           # Entry point: wire UCI engine + screen components + Speech_thread
 │
 │   [EXISTING — unchanged]
 ├── calibration/
@@ -159,7 +253,7 @@ src/uci_screen_bridge/
     └── paths.py
 ```
 
-### 5.2 UCIEngine State Machine
+### 6.2 UCIEngine State Machine
 
 ```text
                     ┌─────────┐
@@ -187,13 +281,14 @@ src/uci_screen_bridge/
                          ▼                                            │
                     ┌─────────────────────────┐                      │
                     │  SCANNING               │  (blocks)            │
+                    │  - set_baseline()       │                      │
                     │  - CV poll loop         │                      │
                     │  - Detect opponent move │                      │
                     │  - Print bestmove       │──────────────────────┘
                     └─────────────────────────┘
 ```
 
-### 5.3 UCI `position` Parsing Logic
+### 6.3 UCI `position` Parsing Logic
 
 ```python
 def _handle_position(self, command):
@@ -220,59 +315,76 @@ def _handle_position(self, command):
             self.executor.execute(last_move)
 ```
 
-### 5.4 `go` Command Handler
+### 6.4 `go` Command Handler
 
 ```python
 def _handle_go(self, command):
     # Capture baseline board image at go time
     self.detector.set_baseline()
-    # Block-scan for opponent move
+    # Block-scan for opponent move (returns "0000" on timeout)
     opponent_move = self.detector.wait_for_move(self.board)
     # Update internal state
-    self.board.push(chess.Move.from_uci(opponent_move))
-    self.played_moves.append(opponent_move)
+    if opponent_move != "0000":
+        self.board.push(chess.Move.from_uci(opponent_move))
+        self.played_moves.append(opponent_move)
     # Return to UCI
     print(f"bestmove {opponent_move}")
     sys.stdout.flush()
 ```
 
-### 5.5 `screen/detector.py` — MoveDetector
+### 6.5 `screen/detector.py` — MoveDetector
 
 Wraps `Game_state` from `commentator.py`:
 
 ```python
 class MoveDetector:
-    def __init__(self, board_position, we_play_white, scan_interval_ms):
+    def __init__(self, board_position, we_play_white, scan_interval_ms, move_timeout_s):
         self.game_state = Game_state()
         self.game_state.board_position_on_screen = board_position
         self.game_state.we_play_white = we_play_white
         self.scan_interval = scan_interval_ms / 1000.0
+        self.move_timeout = move_timeout_s
         self.game_state.sct = mss.mss()
 
     def set_baseline(self):
+        """Call at go time. Captures the current board state as reference.
+        After bestmove is returned, call set_baseline() again at the next go
+        so the new board position becomes the reference for the next turn."""
         self.game_state.previous_chessboard_image = self.game_state.get_chessboard()
         self.game_state.classifier = Classifier(self.game_state)
 
     def wait_for_move(self, board):
+        """Block until a legal opponent move is detected or timeout is reached.
+        Returns UCI move string, or '0000' on timeout."""
         self.game_state.board = board.copy()
-        while True:
+        deadline = time.time() + self.move_timeout
+        while time.time() < deadline:
             found, move = self.game_state.register_move_if_needed()
             if found:
                 return move.uci() if hasattr(move, 'uci') else move
             time.sleep(self.scan_interval)
+        return "0000"
 ```
 
-### 5.6 `screen/executor.py` — MoveExecutor
+**Baseline lifecycle:** `set_baseline()` is called once per `go` command, immediately before the scan loop starts. The baseline image (`previous_chessboard_image`) persists through the entire wait. After `bestmove` is returned, `set_baseline()` is called again at the start of the *next* `go` command, ensuring the post-move board state becomes the new reference. `Game_state.register_move()` updates `previous_chessboard_image` internally after each registered move — this is the same mechanism used in the existing webcam game loop.
 
-Thin wrapper around `Internet_game`:
+### 6.6 `screen/executor.py` — MoveExecutor
+
+Uses a thin `DirectInternetGame` subclass to bypass the GUI-specific `Internet_game.__init__`:
 
 ```python
+class DirectInternetGame(Internet_game):
+    """Thin subclass of Internet_game that accepts board position directly,
+    bypassing the GUI-dependent __init__ of the parent class."""
+    def __init__(self, board_position, we_play_white, drag_drop):
+        # Deliberately do NOT call super().__init__() — it expects GUI context
+        self.position = board_position
+        self.we_play_white = we_play_white
+        self.drag_drop = drag_drop
+
 class MoveExecutor:
     def __init__(self, board_position, we_play_white, drag_drop):
-        self.game = Internet_game.__new__(Internet_game)
-        self.game.position = board_position
-        self.game.we_play_white = we_play_white
-        self.game.drag_drop = drag_drop
+        self.game = DirectInternetGame(board_position, we_play_white, drag_drop)
 
     def execute(self, uci_move_str):
         move = chess.Move.from_uci(uci_move_str)
@@ -281,7 +393,9 @@ class MoveExecutor:
         self.game.move(move)
 ```
 
-### 5.7 `screen/calibration.py` — BoardCalibration
+> **Reuse table note:** `Internet_game` is marked as "needs thin subclass" in Section 4.2, not "directly reusable". This approach makes the bypass intentional and fails loudly if `Internet_game` internals change, rather than silently misbehaving.
+
+### 6.7 `screen/calibration.py` — BoardCalibration
 
 ```python
 SAVE_FILE = data_path("board_position.bin")
@@ -304,48 +418,78 @@ def load():
 
 ---
 
-## 6. Implementation Phases
+## 7. Implementation Phases
 
 ### Phase 1 — UCI Engine Skeleton
 **Goal:** A working UCI loop that correctly handshakes and parses position/go commands.
 
-**Files to create:**
+**Files to create (tests first):**
+- `tests/uci/test_engine.py` ← **write and commit before implementation**
 - `src/uci_screen_bridge/uci/__init__.py`
 - `src/uci_screen_bridge/uci/engine.py`
 
 **Deliverable:** Running `echo -e "uci\nisready\nquit"` piped to the engine produces correct UCI handshake output.
 
 **Acceptance criteria:**
-- Responds to `uci` with `id name UCI Screen Bridge`, `id author [name]`, UCI options, `uciok`
+- Responds to `uci` with `id name UCI Screen Bridge`, `id author [name]`, all 8 UCI options, `uciok`
 - Responds to `isready` with `readyok`
 - Responds to `ucinewgame` by resetting internal board
 - Parses `position startpos moves e2e4 e7e5` correctly
 - Exits cleanly on `quit`
+
+#### Phase 1 Test Suite (`tests/uci/test_engine.py`)
+
+All tests may call parser functions directly (unit style) or pipe commands to the engine subprocess via `subprocess.Popen`.
+
+| Test | Description |
+|------|-------------|
+| `test_uci_handshake` | `uci` command output contains `id name UCI Screen Bridge`, `id author`, all 8 UCI options, and `uciok` |
+| `test_isready` | `isready` responds with exactly `readyok` |
+| `test_ucinewgame_resets_board` | After `position startpos moves e2e4`, `ucinewgame` resets the board to the starting position |
+| `test_position_startpos_one_move` | `position startpos moves e2e4` results in board where e4 is occupied by a white pawn |
+| `test_position_startpos_three_moves` | `position startpos moves e2e4 e7e5 g1f3` leaves board with correct FEN (knight on f3, pawns on e4/e5) |
+| `test_position_fen` | `position fen <fen> moves ...` correctly parses a non-starting FEN and applies subsequent moves |
+| `test_move_delta_player_move` | When player side is white and a white move is added, executor is called exactly once with the new move |
+| `test_move_delta_opponent_move` | When player side is white and a black move is added, executor is NOT called |
+| `test_move_delta_no_new_move` | Sending the same position twice does not trigger the executor |
+| `test_quit_exits` | `quit` causes the process to exit with code 0 |
 
 ---
 
 ### Phase 2 — Board Calibration
 **Goal:** Detect the chess board on screen and persist its position.
 
-**Files to create:**
+**Files to create (tests first):**
+- `tests/screen/test_calibration.py` ← **write and commit before implementation**
 - `src/uci_screen_bridge/screen/__init__.py`
 - `src/uci_screen_bridge/screen/calibration.py`
 
 **Deliverable:** Running `python -m uci_screen_bridge.calibrate` detects the board and saves `data/board_position.bin`.
 
 **Acceptance criteria:**
-- Auto-detect works against Chess.com and Lichess boards
-- Template-match works as fallback
+- Auto-detect (Hough-line) works against Chess.com and Lichess boards
+- Template-match works when explicitly selected (`CalibrationMethod = Template`)
 - `we_play_white` is correctly determined
 - Saved data loads correctly on next engine start
 - If no saved data, auto-detect runs on `isready`
+
+#### Phase 2 Test Suite (`tests/screen/test_calibration.py`)
+
+| Test | Description |
+|------|-------------|
+| `test_detect_and_save_auto` | `detect_and_save(method="auto")` with mocked `auto_find_chessboard()` returning a fixed `Board_position` writes the correct data to a temp file |
+| `test_detect_and_save_template` | `detect_and_save(method="template")` with mocked `find_chessboard()` returning a fixed `Board_position` writes the correct data |
+| `test_load_returns_none_when_missing` | `load()` returns `(None, None)` when the save file does not exist |
+| `test_load_round_trip` | After `detect_and_save()`, `load()` returns the same `Board_position` and `we_play_white` values |
+| `test_board_position_values_plausible` | Loaded `Board_position` satisfies `minX < maxX` and `minY < maxY` |
 
 ---
 
 ### Phase 3 — Move Executor
 **Goal:** Execute a player's UCI move as mouse clicks on the screen board.
 
-**Files to create:**
+**Files to create (tests first):**
+- `tests/screen/test_executor.py` ← **write and commit before implementation**
 - `src/uci_screen_bridge/screen/executor.py`
 
 **Deliverable:** Given a detected board position, `executor.execute("e2e4")` clicks the correct squares.
@@ -356,12 +500,23 @@ def load():
 - Humanization delay applied (random 50–200ms between clicks)
 - No import errors or crashes on a real browser window
 
+#### Phase 3 Test Suite (`tests/screen/test_executor.py`)
+
+| Test | Description |
+|------|-------------|
+| `test_execute_white_on_bottom` | `execute("e2e4")` with white-on-bottom calls `pyautogui.click` twice with correct pixel coordinates (mock pyautogui) |
+| `test_execute_black_on_bottom` | `execute("e2e4")` with black-on-bottom (board flipped) calls `pyautogui.click` with correctly mirrored coordinates |
+| `test_humanization_delay` | The time elapsed between the two clicks is within the 50–200ms range |
+| `test_drag_drop_mode` | With `drag_drop=True`, calls `pyautogui.moveTo` + `pyautogui.dragTo` instead of two `click` calls |
+| `test_promotion_move` | `execute("e7e8q")` triggers the promotion dialog handler after the destination click |
+
 ---
 
 ### Phase 4 — Move Detector
 **Goal:** Detect an opponent move from screen pixels and return it as a UCI string.
 
-**Files to create:**
+**Files to create (tests first):**
+- `tests/screen/test_detector.py` ← **write and commit before implementation**
 - `src/uci_screen_bridge/screen/detector.py`
 
 **Deliverable:** `detector.wait_for_move(board)` blocks until a legal opponent move appears on screen.
@@ -371,17 +526,33 @@ def load():
 - Double-confirmation (100ms anti-animation debounce) is active
 - Promotion detection works for opponent promotions
 - Does not return a move that was already in `board`'s history
+- Returns `"0000"` when `MoveTimeout` is reached
+
+#### Phase 4 Test Suite (`tests/screen/test_detector.py`)
+
+All tests use the `mock_mss` fixture from `conftest.py` to supply board images from `tests/fixtures/`.
+
+| Test | Description |
+|------|-------------|
+| `test_set_baseline_captures_image` | `set_baseline()` sets `game_state.previous_chessboard_image` to a non-None numpy array |
+| `test_set_baseline_creates_classifier` | `set_baseline()` creates a `Classifier` instance on `game_state` |
+| `test_wait_for_move_detects_move` | Given before/after PNG fixtures for a known position (e.g., e2→e4), `wait_for_move()` returns `"e2e4"` |
+| `test_double_confirmation_rejects_animation` | A move detected only on the first scan but not on the second (100ms later) is rejected; function continues waiting |
+| `test_castling_detection` | Before/after image pair for king-side castling returns `"e1g1"` |
+| `test_timeout_returns_null_move` | With `move_timeout_s=0.1` and a static board image (no move), returns `"0000"` within 1 second |
 
 ---
 
 ### Phase 5 — Integration & Entry Point
 **Goal:** Wire all components into a working UCI engine binary.
 
-**Files to create:**
-- `src/uci_screen_bridge/uci_bridge.py` (entry point)
+**Files to create (tests first):**
+- `tests/integration/test_uci_round_trip.py` ← **write and commit before implementation**
+- `src/uci_screen_bridge/uci_bridge.py` (entry point; integrates `Speech_thread` for TTS alerts)
 
 **Files to modify:**
 - `pyproject.toml` — add new console script: `uci-screen-bridge-engine = "uci_screen_bridge.uci_bridge:main"`
+- `requirements_dev.txt` — add `pytest>=8.0`, `pytest-mock>=3.12`, `Pillow>=10.0`
 
 **Deliverable:** BearChess can configure the engine, make a move, and the engine returns an opponent move correctly.
 
@@ -390,21 +561,50 @@ def load():
 - Works end-to-end with Chess.com in a browser
 - No stdout pollution from debug prints (guard all debug output with `info string` prefix)
 
+#### Phase 5 Test Suite (`tests/integration/test_uci_round_trip.py`)
+
+Full round-trip tests using pipe to the engine subprocess. All screen interactions are mocked via fixture injection.
+
+| Test | Description |
+|------|-------------|
+| `test_uci_isready_sequence` | Sends `uci` then `isready`; receives `uciok` then `readyok` in correct order |
+| `test_ucinewgame_then_position` | After `ucinewgame`, `position startpos moves e2e4` does not crash and executor is called |
+| `test_go_returns_bestmove` | After setup, `go` returns a `bestmove <uci>` line within the configured timeout |
+| `test_no_stdout_pollution` | All non-`bestmove` / non-`info` / non-`readyok` / non-`uciok` output is absent from stdout during a full round-trip |
+| `test_executor_called_on_player_move` | Mocked executor's `execute()` is called exactly once when playing white and a white move is issued |
+
 ---
 
 ### Phase 6 — Hardening & Edge Cases
 **Goal:** Handle real-world failure modes robustly.
 
+**Files to create (tests first):**
+- Tests appended to or alongside existing phase test files
+
 **Items:**
-- **Board not found:** If calibration fails on startup, emit `info string ERROR: chess board not found on screen. Please navigate to chess board and restart.` and enter a retry loop.
-- **Scan timeout:** If `wait_for_move()` runs for > N seconds (configurable UCI option `MoveTimeout`), emit `bestmove 0000` (null move) to unblock the GUI.
-- **Board state drift:** If the CV scan detects a move that doesn't match any legal move (e.g., premove, board refresh animation), log via `info string` and retry.
-- **Reconnect:** If the screen board disappears (window closed/minimized), re-run calibration or pause until board reappears.
+
+- **Board not found:** If calibration fails on startup, emit `info string ERROR: chess board not found on screen. Please navigate to chess board and restart.` and enter a retry loop (up to 3 attempts, 2s apart). If still failing after 3 attempts, exit with non-zero status.
+- **Move execution failure:** If `executor.execute()` raises (window not found, click fails), retry up to 3 times with 500ms backoff. If still failing after 3 retries, emit `info string ERROR: could not execute move` + TTS alert "Move execution failed, please check the screen" + output `bestmove 0000`.
+- **Board state drift:** If the CV scan detects a move that doesn't match any legal move (e.g., premove, board refresh animation), emit `info string WARNING: illegal move detected, retrying`, reset `previous_chessboard_image` to the current frame, and retry. If drift persists for 3 consecutive scans, emit TTS "Board detection error, please check the window".
+- **Scan timeout (MoveTimeout reached):** Emit `info string WARNING: move timeout after N seconds` + TTS "Move timeout, no opponent move detected" + `bestmove 0000`.
+- **Calibration stale:** If saved `board_position.bin` is more than 24 hours old, discard it and re-run auto-detect on the next `isready`. Log `info string INFO: stale calibration data, re-detecting board`.
+- **Window moved/resized:** If CV confidence drops below threshold for 3 consecutive scans, emit TTS "Chess board lost, recalibrating" and attempt re-detect.
 - **Draw / resign / game over:** Detect via `board.is_game_over()` and emit appropriate `info string` messages.
+- **TTS alerts:** All audible alerts require `TTSAlerts = true` (default). Use `Speech_thread` from `utils/speech.py` with English alert phrases only; no full game commentary infrastructure.
+
+#### Phase 6 Test Suite
+
+| Test | Description |
+|------|-------------|
+| `test_timeout_emits_null_bestmove` | `bestmove 0000` is emitted after `MoveTimeout` seconds with no detected move |
+| `test_calibration_failure_emits_error` | When `auto_find_chessboard()` raises, `info string ERROR:` is printed on stdout |
+| `test_no_legal_moves_drift` | When board image shows no legal moves for 3 consecutive scans, TTS is triggered and scan resets |
+| `test_move_execution_retry` | If executor raises on first two attempts, third attempt succeeds; no `bestmove 0000` emitted |
+| `test_stale_calibration_triggers_redetect` | If `board_position.bin` mtime is >24h old, `isready` discards the file and re-runs detection |
 
 ---
 
-## 7. Data Files (Runtime)
+## 8. Data Files (Runtime)
 
 | File | Contents | Created by |
 |------|----------|-----------|
@@ -414,7 +614,7 @@ The existing `data/*.bin` files (constants, ssim, hog, gui, promotion) are not u
 
 ---
 
-## 8. Entry Points Summary
+## 9. Entry Points Summary
 
 | Command | Purpose |
 |---------|---------|
@@ -424,9 +624,9 @@ The existing `data/*.bin` files (constants, ssim, hog, gui, promotion) are not u
 
 ---
 
-## 9. Dependencies
+## 10. Dependencies
 
-All needed libraries already exist in `requirements.txt`:
+All needed runtime libraries already exist in `requirements.txt`:
 - `python-chess` — board state tracking, legal move validation
 - `opencv-python` — image processing (pixel diff, Canny, Hough, OCM, ONNX inference)
 - `pyautogui` — mouse click simulation
@@ -434,11 +634,16 @@ All needed libraries already exist in `requirements.txt`:
 - `numpy` — pixel array manipulation
 - `scikit-image` — SSIM (used by classifier pipeline)
 
-No new dependencies are needed.
+**New test dependencies** (add to `requirements_dev.txt`):
+- `pytest>=8.0` — test runner (`make test`)
+- `pytest-mock>=3.12` — mocking for CV and screen-capture dependencies
+- `Pillow>=10.0` — synthesizing and loading test images in fixtures
+
+No new runtime dependencies are needed.
 
 ---
 
-## 10. Key Design Decisions & Rationale
+## 11. Key Design Decisions & Rationale
 
 ### Why reuse `Game_state` from `commentator.py`?
 It already implements the complete opponent move detection pipeline: screenshot → square diff → OCM classification → chess legality check → castling handling → animation debounce. This is the hardest part to get right and it's already proven to work against Chess.com and Lichess.
@@ -452,18 +657,26 @@ The UCI engine communicates entirely via stdin/stdout. The Chess GUI (BearChess/
 ### Why block on `go`?
 UCI engines are expected to think and then respond. Since this bridge has no evaluation to do, it simply waits until the opponent makes their move on screen. This is the correct UCI behavior — the Chess GUI will wait for `bestmove` before allowing further input.
 
+### Why `DirectInternetGame` subclass instead of `__new__`?
+`Internet_game.__init__` expects GUI context (a settings object and running calibration state). Rather than calling `__new__` and manually setting attributes (fragile if the parent class changes), a thin subclass with an explicit `__init__` makes the bypass intentional and visible. If `Internet_game` is refactored, the subclass will fail loudly rather than silently.
+
+### Why TTS alerts via `Speech_thread` and not a new mechanism?
+`Speech_thread` is already cross-platform (macOS `say` / pyttsx3) and is a battle-tested daemon thread. Rather than re-implementing TTS plumbing, we reuse the wrapper and control it with the `TTSAlerts` UCI option. Only English alert phrases are used — no full commentary infrastructure.
+
 ### Thread safety
-The UCI engine runs single-threaded on stdin. Move execution (Phase 3) and move detection (Phase 4) run synchronously in the main thread (called from the UCI loop). This avoids the complexity of the existing multi-threaded architecture, which was necessary for the webcam loop but is not needed here. If performance becomes an issue, the executor click can be moved to a background thread.
+The UCI engine runs single-threaded on stdin. Move execution (Phase 3) and move detection (Phase 4) run synchronously in the main thread (called from the UCI loop). `Speech_thread` runs as a background daemon thread. This avoids the complexity of the existing multi-threaded architecture, which was necessary for the webcam loop but is not needed here.
 
 ---
 
-## 11. Risks & Mitigations
+## 12. Risks & Mitigations
 
 | Risk | Mitigation |
 |------|-----------|
-| Screen board not detected | Template fallback + retry loop + `info string` diagnostic |
+| Screen board not detected | Hough-line auto-detect is default; retry loop up to 3×; `info string` diagnostic; manual recalibrate option |
 | Animation causes false move detection | Double-confirmation (100ms) already in `Game_state` |
 | Chess GUI sends `go` before player's move is reflected on screen | Executor performs click before returning control to `go` handler |
-| Promotion dialog varies by site | Phase 3 hardening: after destination click, scan for promotion widget |
+| Promotion dialog varies by site | `PromotionStyle` UCI option (`Auto`/`ChessCom`/`Lichess`); queen fallback with `info string WARNING` |
 | HiDPI / Retina display coordinate scaling | PyAutoGUI handles this via screen coordinate space; mss captures at physical resolution. Verify during testing |
 | Bot detection on chess sites | Humanization delay on clicks (FR3.3) |
+| Test images not representative | Provide 4+ reference screenshots; supplement with synthetic numpy arrays for edge cases |
+| `Internet_game` internals change | `DirectInternetGame` subclass fails loudly on breakage; easy to update |
