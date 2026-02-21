@@ -283,7 +283,7 @@ When the player makes a move, execute it via simulated mouse input.
 - **FR3.4 Promotion:** If the move includes a promotion piece (e.g., `e7e8q`), after the destination click:
   1. Poll every 50ms (up to 500ms) for the promotion dialog to appear. Proceed as soon as it is detected; do not wait the full 500ms if detected earlier.
   2. **Dialog direction:** The dialog always appears toward the *near edge* — the edge closest to the promoting player's side. For white promoting on rank 8, the dialog appears above the destination square. For black promoting on rank 1, the dialog appears below the destination square.
-  3. Capture a screenshot of the near-edge region (≈1.5 square heights above or below the destination square). Scan for the promotion dialog using the pattern: a sudden color transition (brighter or darker band) in a pixel column.
+  3. Capture a screenshot of the near-edge region (≈1.5 square heights above or below the destination square). Detect whether a promotion dialog is present by checking if the near-edge region differs significantly from the pre-move baseline (any pixel-diff threshold above background noise). The exact detection method is site-dependent and may be refined during implementation — the important constraint is that the fallback (item 6) handles false negatives robustly.
   4. **Icon position lookup table** (controlled by `PromotionStyle` UCI option):
      - `ChessCom`: icons stacked **vertically** above/below the destination square. Order top→bottom: Queen(0), Knight(1), Rook(2), Bishop(3). Click position: `destination_center + (icon_index × square_size)` in the vertical direction toward the near edge.
      - `Lichess`: icons arranged **horizontally** in a row at the top or bottom of the board. Order left→right: Queen(0), Rook(1), Bishop(2), Knight(3). Click position: `destination_center + (icon_index × square_size)` in the horizontal direction.
@@ -449,6 +449,13 @@ def _handle_go(self, command):
     sys.stdout.flush()
 ```
 
+> **`stop` command handling:** The CV scan loop must not block stdin. Implementation:
+> Run `detector.wait_for_move()` in a `threading.Thread` (daemon). The main thread
+> continues the read loop. On receiving `stop`, set a `threading.Event` that
+> `wait_for_move()` checks between scan intervals. When the event is set,
+> `wait_for_move()` returns `"0000"` immediately and the main thread emits
+> `bestmove 0000`.
+
 ### 6.5 `screen/detector.py` — MoveDetector
 
 Wraps `Game_state` from `commentator.py`:
@@ -591,6 +598,11 @@ def load():
     with open(SAVE_FILE, 'rb') as f:
         return pickle.load(f)
 ```
+
+> `_to_logical(position, scale)` divides `position.minX`, `minY`, `maxX`, `maxY` in
+> place by `scale` (no new instance needed — `Board_position` is a plain mutable class).
+> `_compute_hidpi_scale()` returns `pyautogui.size().width / mss_grab_width`; log both
+> values at DEBUG level for diagnostics.
 
 > `auto_find_chessboard()` was modified to return `(None, None)` instead of calling
 > `sys.exit(0)` on failure. `detect_and_save()` checks for `None` and raises
