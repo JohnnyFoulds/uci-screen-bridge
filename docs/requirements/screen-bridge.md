@@ -512,20 +512,21 @@ def load():
 
 ## 7. Implementation Phases
 
-### Phase 0 — Viability Spike (non-TDD, throwaway)
-**Goal:** Validate that `Game_state` can be used standalone before committing to full TDD.
+### Phase 0 — Isolation Smoke Tests (committed, instant)
+**Goal:** Confirm `Game_state` can be used standalone before committing to full TDD phases.
 
-**Do this before writing any tests:**
-1. Instantiate `Game_state()` directly
-2. Set `board_position_on_screen`, `we_play_white`, `sct`
-3. Inject `_GameThreadStub` (empty `played_moves = []`) as `game_state.game_thread`
-4. Call `set_baseline()` with a real Chess.com/Lichess screen open
-5. Call `register_move_if_needed()` in a 5-second loop
-6. Make a move on screen; verify the move string is returned
+**File:** `tests/screen/test_detector.py` (seed file for Phase 4)
 
-**Success criteria:** A legal opponent move string is returned. If this fails, we refactor `Game_state` before writing any Phase 4 tests.
+The coupling point is fully understood: `register_move_if_needed()` accesses
+`self.game_thread.played_moves` (lines 264–265 of `commentator.py`) only in the
+premove-detection branch. Injecting `_GameThreadStub(played_moves=[])` is the fix.
 
-This spike is throwaway code — not committed, not tested. Purpose: fail fast on the riskiest assumption before investing in TDD infrastructure.
+Two committed smoke tests replace exploratory spike code:
+- `test_game_state_instantiates_without_thread` — verifies standalone instantiation
+- `test_game_thread_stub_prevents_attribute_error` — verifies the stub injection works
+
+**Success criteria:** Both tests pass green with no screen, no browser, no fixtures.
+Run: `pytest tests/screen/test_detector.py -v`
 
 ---
 
