@@ -4,7 +4,7 @@ SHELL=/bin/bash
 PROJECT_PATH := "."
 VENV_NAME := "uci-screen-bridge"
 
-.PHONY: install-miniconda create-venv install venv clean
+.PHONY: install-miniconda create-venv install venv clean test test-full
 
 
 # install miniconda
@@ -22,6 +22,14 @@ install-miniconda:
 # install the package in editable mode
 install:
 	pip install -e .
+
+# run Tier 1 + Tier 2 tests (headless, no screen required — suitable for CI)
+test:
+	pytest tests/ -v -m "not integration"
+
+# run all tiers including Tier 3 (requires a display and browser)
+test-full:
+	pytest tests/ -v
 
 # remove and recreate the conda environment from scratch
 clean:

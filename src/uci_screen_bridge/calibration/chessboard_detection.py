@@ -1,5 +1,3 @@
-import sys
-
 import numpy as np
 from uci_screen_bridge.utils.paths import model_path
 import cv2
@@ -54,7 +52,7 @@ def auto_find_chessboard():
     (is_found, current_chessboard_image,
      minX, minY, maxX, maxY, test_image) = find_chessboard_from_image(img)
     if not is_found:
-        sys.exit(0)
+        return None, None
     position = Board_position(minX, minY, maxX, maxY)
     return position, is_white_on_bottom(current_chessboard_image)
 
