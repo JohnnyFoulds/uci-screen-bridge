@@ -261,7 +261,7 @@ class Game_state:
             self.register_move(valid_move_UCI, new_board)
             return True, valid_move_UCI
         elif potential_starts:  # Fix for premove
-            if len(self.registered_moves) < len(self.game_thread.played_moves):
+            if self.game_thread is not None and len(self.registered_moves) < len(self.game_thread.played_moves):
                 valid_move_UCI = self.game_thread.played_moves[len(self.registered_moves)]
                 self.register_move(valid_move_UCI, self.previous_chessboard_image)
                 return True, valid_move_UCI
