@@ -18,7 +18,8 @@ option name DragDrop type check default false
 option name MoveTimeout type spin default 60 min 10 max 300
 option name Recalibrate type button
 option name TTSAlerts type check default true
-option name PromotionStyle type combo default Auto var Auto var ChessCom var Lichess"""
+option name PromotionStyle type combo default Auto var Auto var ChessCom var Lichess
+option name LogLevel type combo default INFO var DEBUG var INFO var WARNING var OFF"""
 
 # Number of outer retry attempts and inner polls in _run_guided_calibration.
 _CALIBRATION_OUTER_ATTEMPTS = 3

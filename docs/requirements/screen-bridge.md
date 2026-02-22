@@ -368,17 +368,39 @@ src/uci_screen_bridge/
 import logging
 from uci_screen_bridge.utils.paths import uci_data_path
 
+_log_handler: logging.FileHandler | None = None
+
 def _configure_logging(level_name: str):
+    global _log_handler
     level = getattr(logging, level_name, logging.INFO)
+    root = logging.getLogger()
+
     if level_name == "OFF":
-        return  # no log file written
-    log_file = uci_data_path("uci-bridge.log")
-    logging.basicConfig(
-        filename=str(log_file),
-        level=level,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+        if _log_handler is not None:
+            root.removeHandler(_log_handler)
+            _log_handler.close()
+            _log_handler = None
+        return
+
+    if _log_handler is None:
+        # First call: create and attach the FileHandler.
+        # platformdirs>=3.11 supports ensure_exists=True on user_data_dir(),
+        # so uci_data_path() can use that instead of manual mkdir.
+        log_file = uci_data_path("uci-bridge.log")
+        _log_handler = logging.FileHandler(str(log_file), mode="a")
+        _log_handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(name)s %(levelname)s %(message)s"
+        ))
+        root.addHandler(_log_handler)
+
+    # Apply level — works for first call and runtime updates via setoption.
+    root.setLevel(level)
+    _log_handler.setLevel(level)
 ```
+
+> **Note:** `logging.basicConfig()` is one-shot in Python — it does nothing if handlers
+> already exist. This implementation uses an explicit `FileHandler` so that `LogLevel`
+> changes via `setoption` take effect immediately at runtime.
 
 All internal modules use a module-level logger (`logger = logging.getLogger(__name__)`). `UCIEngine._emit()` is the **only** function allowed to write to stdout. Everything else logs.
 
@@ -436,13 +458,22 @@ def _handle_position(self, command):
     # If a new move was added and it belongs to us: execute it on screen
     if len(new_moves) > prev_len:
         last_move = new_moves[-1]
-        # Determine whose move it was: before pushing it, the board's turn
-        # tells us which color made that move. Compare with we_play_white.
-        move_count_before = len(new_moves) - 1
-        it_was_white = (move_count_before % 2 == 0)  # White moves on even indices
+        # Determine whose move it was: rebuild the board up to (but not including)
+        # the last move, then read board.turn — that is the color that made the move.
+        # NOTE: White always moves first in chess, so for `startpos` this is equivalent
+        # to parity (even index → White). Using board.turn also handles FEN positions
+        # where Black is the initial side to move (e.g., puzzle/analysis setups).
+        check_board = chess.Board()  # or chess.Board(fen) for FEN variants
+        for m in new_moves[:-1]:
+            check_board.push(chess.Move.from_uci(m))
+        it_was_white = (check_board.turn == chess.WHITE)
         if it_was_white == self.we_play_white:
             self.executor.execute(last_move)
 ```
+
+> **Note:** For `position startpos`, `board.turn` at index N is always `chess.WHITE` for
+> even N — consistent with parity. The `board.turn` form is preferred because it is
+> self-documenting and handles FEN positions where Black has the initial move.
 
 ### 6.4 `go` Command Handler
 
@@ -460,12 +491,13 @@ def _handle_go(self, command):
     self._emit(f"bestmove {opponent_move}")
 ```
 
-> **`stop` command handling:** The CV scan loop must not block stdin. Implementation:
-> Run `detector.wait_for_move()` in a `threading.Thread` (daemon). The main thread
-> continues the read loop. On receiving `stop`, set a `threading.Event` that
-> `wait_for_move()` checks between scan intervals. When the event is set,
-> `wait_for_move()` returns `"0000"` immediately and the main thread emits
-> `bestmove 0000`.
+> **`stop` command handling:** `wait_for_move()` runs inline in the engine/scan thread,
+> checking a `threading.Event` (`_stop_event`) between each scan interval. The **reader
+> thread** continues reading stdin and enqueues `stop`. When the engine/scan thread drains
+> the queue and sees `stop`, it sets `_stop_event`. On the next interval check,
+> `wait_for_move()` returns `"0000"` and `self._emit("bestmove 0000")` is called once.
+> Because only the engine thread calls `_emit()` (Section 13.1), double-emission is
+> structurally impossible — no generation counter is needed.
 
 ### 6.5 `screen/detector.py` — MoveDetector
 
@@ -668,7 +700,7 @@ Run: `pytest tests/screen/test_detector.py -v`
 **Deliverable:** Running `echo -e "uci\nisready\nquit"` piped to the engine produces correct UCI handshake output.
 
 **Acceptance criteria:**
-- Responds to `uci` with `id name UCI Screen Bridge`, `id author [name]`, all 8 UCI options, `uciok`
+- Responds to `uci` with `id name UCI Screen Bridge`, `id author [name]`, all 9 UCI options, `uciok`
 - Responds to `isready` with `readyok`
 - Responds to `ucinewgame` by resetting internal board
 - Parses `position startpos moves e2e4 e7e5` correctly
@@ -680,7 +712,7 @@ All tests may call parser functions directly (unit style) or pipe commands to th
 
 | Test | Description |
 |------|-------------|
-| `test_uci_handshake` | `uci` command output contains `id name UCI Screen Bridge`, `id author`, all 8 UCI options, and `uciok` |
+| `test_uci_handshake` | `uci` command output contains `id name UCI Screen Bridge`, `id author`, all 9 UCI options, and `uciok` |
 | `test_isready` | `isready` responds with exactly `readyok` |
 | `test_isready_before_uci` | `isready` received before `uci` still responds with `readyok` |
 | `test_isready_with_cached_calibration_is_immediate` | When `board_position.bin` exists and is fresh (< 24h), `isready` emits `readyok` immediately with no `CALIBRATING:` lines |
