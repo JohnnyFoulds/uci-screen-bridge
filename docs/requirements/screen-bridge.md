@@ -148,15 +148,21 @@ Screen-capture code (`mss.mss()`) must be replaced with a fixture in all tests s
 # conftest.py
 @pytest.fixture
 def mock_mss(mocker, request):
-    """Return a fake mss context manager that yields fixture images."""
+    """Return a fake mss context manager that yields fixture images as BGRA ndarrays."""
     fixture_name = getattr(request, "param", "chesscom_white.png")
-    img = PIL.Image.open(Path("tests/fixtures") / fixture_name)
-    fake_shot = {"top": 0, "left": 0, "width": img.width, "height": img.height,
-                 "raw": np.array(img)}
+    img = PIL.Image.open(Path("tests/fixtures") / fixture_name).convert("RGBA")
+    # MSS returns BGRA (H,W,4); PIL RGBA → swap R and B channels
+    img_array = np.array(img)[:, :, [2, 1, 0, 3]]  # RGBA → BGRA
     mock = mocker.patch("mss.mss")
-    mock.return_value.__enter__.return_value.grab.return_value = fake_shot
+    mock.return_value.__enter__.return_value.grab.return_value = img_array
     return mock
 ```
+
+> **Note:** `mss.grab()` returns an `mss.screenshot.ScreenShot` object; `np.array()` on it
+> yields a BGRA `(H,W,4)` ndarray via `__array_interface__`. The mock must return the same
+> shape/dtype so production code paths using `cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)` work
+> identically in tests. A plain dict (the previous version) would produce a 0-d object array
+> from `np.array(dict)` — completely wrong type.
 
 Provide at minimum four reference screenshots as test assets in `tests/fixtures/` (Chess.com white/black, Lichess white/black). These are committed into the repository as binary test assets.
 
@@ -261,7 +267,7 @@ The bridge must know where the chess board is on screen before play begins.
 - **FR2.1 Auto-detect (default):** Use Hough-line detection (`auto_find_chessboard()`) to automatically locate the board from a screenshot. This is the **primary and default** method. It requires no user action and no user-provided template files.
 - **FR2.2 Template-match (opt-in):** Use existing `white.JPG` / `black.JPG` templates via `find_chessboard()` as an **opt-in alternative**, activated only when `CalibrationMethod = Template` is explicitly set. This is not a fallback — it is a user-selected mode. Remove any language implying it is a "fallback".
 - **FR2.3 Persistence:** Save the detected `Board_position` and `we_play_white` flag to `data/board_position.bin` (pickle). On subsequent `isready`, load from file to avoid re-detection.
-- **FR2.4 Calibration command:** Support `setoption name Recalibrate value true` (UCI button) or a separate CLI (`python -m uci_screen_bridge.calibrate`) to re-run board detection on demand.
+- **FR2.4 Calibration command:** Support `setoption name Recalibrate` (UCI button; any trailing `value …` is accepted but ignored) or a separate CLI (`python -m uci_screen_bridge.calibrate`) to re-run board detection on demand.
 - **FR2.5 Orientation:** The board detection already returns `we_play_white` via `is_white_on_bottom()`. Confirm this matches the side configured via UCI option. Warn (via `info string`) if there is a mismatch.
 - **FR2.6 Guided calibration flow:** When calibration needs to run (no cached `board_position.bin`, stale data >24h, or `Recalibrate` triggered), the engine must guide the user to ensure only the target web board is visible on screen. A Chess GUI (Fritz, BearChess, etc.) also shows an 8×8 chess board — Hough-line detection cannot distinguish between two boards simultaneously. If both are visible, the merged grid lines produce an unpredictable or failed detection result.
 
@@ -273,6 +279,12 @@ The bridge must know where the chess board is on screen before play begins.
   5. If 60 seconds elapse with no board detected: emit `info string ERROR: Chess board not found on screen. Please navigate to the chess board and use Recalibrate.` + TTS alert. Emit `readyok` anyway — do not hang or exit. Subsequent `go` commands with a `None` board position will emit `bestmove 0000`.
 
   **Subsequent starts:** If `board_position.bin` is fresh (< 24h), skip the guided flow entirely. `readyok` is emitted immediately with no user prompts.
+
+  > **Latency note:** The 60-second calibration block only occurs on first-time setup (no cached
+  > `board_position.bin`). The polling loop emits `info string` progress every 2 seconds, which
+  > prevents well-behaved GUIs from misidentifying the engine as hung. For subsequent `isready`
+  > calls (including during scanning), the reader thread responds to the queue immediately and
+  > `readyok` is emitted without delay.
 
 ### FR3: Move Execution (UCI → Screen)
 When the player makes a move, execute it via simulated mouse input.
@@ -397,11 +409,11 @@ All internal modules use a module-level logger (`logger = logging.getLogger(__na
                          │ "go" received                             │
                          ▼                                            │
                     ┌─────────────────────────┐                      │
-                    │  SCANNING               │  (blocks)            │
+                    │  SCANNING               │                      │
                     │  - set_baseline()       │                      │
                     │  - CV poll loop         │                      │
                     │  - Detect opponent move │                      │
-                    │  - Print bestmove       │──────────────────────┘
+                    │  - Emit bestmove        │──────────────────────┘
                     └─────────────────────────┘
 ```
 
@@ -445,8 +457,7 @@ def _handle_go(self, command):
         self.board.push(chess.Move.from_uci(opponent_move))
         self.played_moves.append(opponent_move)
     # Return to UCI
-    print(f"bestmove {opponent_move}")
-    sys.stdout.flush()
+    self._emit(f"bestmove {opponent_move}")
 ```
 
 > **`stop` command handling:** The CV scan loop must not block stdin. Implementation:
@@ -584,7 +595,7 @@ def detect_and_save(method="auto"):
         raise BoardNotFoundError("No chess board detected on screen")
 
     # Normalise physical-pixel coordinates from mss to logical (pyautogui) coords.
-    # scale = logical_width / mss_image_pixel_width; divides all Board_position
+    # scale = logical_width / mss_image_pixel_width; multiplies all Board_position
     # values so downstream code (get_square_center, executor) uses logical coords.
     position = _to_logical(position, scale=_compute_hidpi_scale())
 
@@ -599,8 +610,10 @@ def load():
         return pickle.load(f)
 ```
 
-> `_to_logical(position, scale)` divides `position.minX`, `minY`, `maxX`, `maxY` in
-> place by `scale` (no new instance needed — `Board_position` is a plain mutable class).
+> `_to_logical(position, scale)` **multiplies** `position.minX`, `minY`, `maxX`, `maxY`
+> in place by `scale` (no new instance needed — `Board_position` is a plain mutable class).
+> On a 2× Retina display, `scale = 1280/2560 = 0.5`, so `p_log = p_phys × 0.5` — halving
+> the physical-pixel coordinate to the logical point as expected.
 > `_compute_hidpi_scale()` returns `pyautogui.size().width / mss_grab_width`; log both
 > values at DEBUG level for diagnostics.
 
@@ -675,7 +688,7 @@ All tests may call parser functions directly (unit style) or pipe commands to th
 | `test_guided_calibration_emits_success_message` | When `auto_find_chessboard()` returns a valid board on first poll, engine emits the "board detected" message before `readyok` |
 | `test_guided_calibration_retries_on_none` | When `auto_find_chessboard()` returns `None` for the first several polls then succeeds, `readyok` is eventually emitted with success message |
 | `test_guided_calibration_timeout_emits_error` | When all polls time out (60s), `info string ERROR:` is emitted and `readyok` is still sent (engine does not hang) |
-| `test_recalibrate_reruns_guided_flow` | `setoption name Recalibrate value true` triggers the same guided flow as first-run calibration (prompts user, polls, emits success) |
+| `test_recalibrate_reruns_guided_flow` | `setoption name Recalibrate` (canonical form; also test `setoption name Recalibrate value true` for GUI compatibility) triggers the same guided flow as first-run calibration (prompts user, polls, emits success) |
 | `test_tts_called_on_calibration_prompt` | With `TTSAlerts = true`, `Speech_thread` receives the "minimize your client" phrase during guided calibration |
 | `test_tts_not_called_when_disabled` | With `TTSAlerts = false`, no TTS call is made during guided calibration |
 | `test_ucinewgame_resets_board` | After `position startpos moves e2e4`, `ucinewgame` resets the board to the starting position |
@@ -975,7 +988,14 @@ UCI engines are expected to think and then respond. Since this bridge has no eva
 `Speech_thread` is already cross-platform (macOS `say` / pyttsx3) and is a battle-tested daemon thread. Rather than re-implementing TTS plumbing, we reuse the wrapper and control it with the `TTSAlerts` UCI option. Only English alert phrases are used — no full commentary infrastructure.
 
 ### Thread safety
-The UCI engine runs single-threaded on stdin. Move execution (Phase 3) and move detection (Phase 4) run synchronously in the main thread (called from the UCI loop). `Speech_thread` runs as a background daemon thread. This avoids the complexity of the existing multi-threaded architecture, which was necessary for the webcam loop but is not needed here.
+The UCI engine uses a **two-thread model** so that stdin stays readable during the CV scan loop:
+
+- **Reader thread** — dedicated daemon thread that blocks on `sys.stdin.readline()` and pushes parsed commands onto an internal `queue.Queue`. This thread never stalls even while the engine is scanning.
+- **Engine/scan thread (main)** — drains the queue, runs calibration, executes moves, and runs the CV scan loop. During scanning, it checks a `threading.Event` (`_stop_event`) between each poll interval. On receiving `stop` or `quit` from the queue, it sets the event so `wait_for_move()` can exit cleanly between intervals.
+- **`isready` during scanning** — because `isready` is read by the reader thread and enqueued immediately, the engine thread can service it from the queue without interrupting the scan loop; `readyok` is emitted promptly.
+- **`Speech_thread`** — additional background daemon for TTS output; unrelated to the UCI read/scan split.
+
+This matches the design already specified in Section 6.4's note on `stop` command handling.
 
 ---
 
@@ -987,7 +1007,7 @@ The UCI engine runs single-threaded on stdin. Move execution (Phase 3) and move 
 | Animation causes false move detection | Double-confirmation (100ms) already in `Game_state` |
 | Chess GUI sends `go` before player's move is reflected on screen | Executor performs click before returning control to `go` handler |
 | Promotion dialog varies by site | `PromotionStyle` UCI option (`Auto`/`ChessCom`/`Lichess`); queen fallback with `info string WARNING` |
-| HiDPI / Retina display coordinate scaling | After `mss.grab()`, compute `scale = logical_width / mss_image_pixel_width` (where `logical_width` is from `pyautogui.size()` and `mss_image_pixel_width` is the actual pixel width of the captured array). Divide all `Board_position` coordinate values by this scale before storing them. This normalises to logical coordinates once at calibration time; all downstream code (`get_square_center`, executor) uses logical coords naturally. Diagnostic: log `pyautogui.size()` vs mss physical dimensions at calibration startup. |
+| HiDPI / Retina display coordinate scaling | After `mss.grab()`, compute `scale = logical_width / mss_image_pixel_width` (where `logical_width` is from `pyautogui.size()` and `mss_image_pixel_width` is the actual pixel width of the captured array). **Multiply** all `Board_position` coordinate values by this scale before storing them (e.g. on 2× Retina: `scale=0.5`, `p_log = p_phys × 0.5`). This normalises to logical coordinates once at calibration time; all downstream code (`get_square_center`, executor) uses logical coords naturally. Diagnostic: log `pyautogui.size()` vs mss physical dimensions at calibration startup. |
 | Bot detection on chess sites | Humanization delay on clicks (FR3.3) |
 | Test images not representative | Provide 4+ reference screenshots; supplement with synthetic numpy arrays for edge cases |
 | `Internet_game` internals change | `DirectInternetGame` subclass fails loudly on breakage; easy to update |
