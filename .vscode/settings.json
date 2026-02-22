@@ -4,5 +4,37 @@
         "tests"
     ],
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
+    "python.testing.pytestEnabled": true,
+    "cSpell.words": [
+        "afile",
+        "asctime",
+        "bestmove",
+        "BGRA",
+        "btime",
+        "chesscom",
+        "Chessnut",
+        "conftest",
+        "hidpi",
+        "isready",
+        "levelname",
+        "Lichess",
+        "movetime",
+        "platformdirs",
+        "Popen",
+        "premove",
+        "pyautogui",
+        "pyproject",
+        "pyttsx",
+        "readyok",
+        "RGBA",
+        "setoption",
+        "SSIM",
+        "startpos",
+        "Tkinter",
+        "ucinewgame",
+        "uciok",
+        "videocapture",
+        "wtime",
+        "xboard"
+    ]
 }
